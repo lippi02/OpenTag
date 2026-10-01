@@ -10,7 +10,7 @@ Same goes for browsers. Chromium browsers will 100% work, but I don't know what 
 >4. Install Seeed nRF52 Boards by Seeed Studio
 >5. Open Google Chrome
 >6. Go to: chrome://flags/#enable-experimental-web-platform-features and Enable it.
-   (Task 1 to 6 needs to be done only at the first time setup)
+>(Task 1 to 6 needs to be done only at the first time setup)
 >7. Open a CMD inside the unzipped folder and run: python -m http.server 8000
 >8. Go back to Chrome and open: http://localhost:8000/
 >9. If you did everything correctly it should show you a map and some set up buttons
