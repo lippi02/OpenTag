@@ -4,15 +4,15 @@ You will also need Python 3.12. Yet again, I don't know if it works on other ver
 Same goes for browsers. Chromium browsers will 100% work, but I don't know what features need to be enabled for it.
 
 # How to use it:
->1. Download the latest [release](https://github.com/lippi02/OpenTag/releases)
->2. Unpack the downloaded ZIP file
->3. Download and Install Arduino IDE
->4. Install Seeed nRF52 Boards by Seeed Studio
->5. Open Google Chrome
->6. Go to: chrome://flags/#enable-experimental-web-platform-features and Enable it.\
->(Task 1 to 6 needs to be done only at the first time setup)
->7. Open a CMD inside the unzipped folder and run: python -m http.server 8000
->8. Go back to Chrome and open: http://localhost:8000/
->9. If you did everything correctly it should show you a map and some set up buttons
->10. Enable location and connect to your device
->11. They should show up on the map and ready to go
+1. Download the latest [release](https://github.com/lippi02/OpenTag/releases)
+2. Unpack the downloaded ZIP file
+3. Download and Install Arduino IDE
+4. Install Seeed nRF52 Boards by Seeed Studio
+5. Open Google Chrome
+6. Go to: chrome://flags/#enable-experimental-web-platform-features and Enable it.\
+(Task 1 to 6 needs to be done only at the first time setup)
+7. Open a CMD inside the unzipped folder and run: python -m http.server 8000
+8. Go back to Chrome and open: http://localhost:8000/
+9. If you did everything correctly it should show you a map and some set up buttons
+10. Enable location and connect to your device
+11. They should show up on the map and ready to go
