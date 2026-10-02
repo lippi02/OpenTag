@@ -8,11 +8,12 @@ Same goes for browsers. Chromium browsers will 100% work, but I don't know what 
 2. Unpack the downloaded ZIP file
 3. Download and Install Arduino IDE
 4. Install Seeed nRF52 Boards by Seeed Studio
-5. Open Google Chrome
-6. Go to: chrome://flags/#enable-experimental-web-platform-features and Enable it.\
-(Task 1 to 6 needs to be done only at the first time setup)
-7. Open a CMD inside the unzipped folder and run: python -m http.server 8000
-8. Go back to Chrome and open: http://localhost:8000/
-9. If you did everything correctly it should show you a map and some set up buttons
-10. Enable location and connect to your device
-11. They should show up on the map and ready to go
+5. Connect your board to your PC and Upload the code
+6. Open Google Chrome
+7. Go to: chrome://flags/#enable-experimental-web-platform-features and Enable it.\
+(Task 1 to 7 needs to be done only at the first time setup)
+8. Open a CMD inside the unzipped folder and run: python -m http.server 8000
+9. Go back to Chrome and open: http://localhost:8000/
+10. If you did everything correctly it should show you a map and some set up buttons
+11. Enable location and connect to your device
+12. They should show up on the map and ready to go
