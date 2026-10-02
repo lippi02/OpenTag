@@ -372,9 +372,13 @@
 
     function setTrackerMode(mode) {
       trackerMode = mode;
-      $("trackerMode").textContent =
-        mode === "lost" ? "ELVESZETT" :
-        mode === "normal" ? "NORMAL" : "–";
+
+      const modeElement = $("trackerMode");
+      if (modeElement) {
+        modeElement.textContent =
+          mode === "lost" ? "ELVESZETT" :
+          mode === "normal" ? "NORMAL" : "–";
+      }
 
       if (mode) {
         $("modeToggle").checked = mode === "lost";
@@ -743,7 +747,9 @@
     $("connectBtn").addEventListener("click", connectTracker);
     $("disconnectBtn").addEventListener("click", disconnectTracker);
     $("modeToggle").addEventListener("change", (event) => {
-      setRemoteMode(event.target.checked ? "lost" : "normal");
+      const mode = event.target.checked ? "lost" : "normal";
+      log(`Webapp: módváltás kérése → ${mode === "lost" ? "ELVESZETT" : "NORMAL"}`);
+      setRemoteMode(mode);
     });
     $("locationBtn").addEventListener("click", startLocation);
     for (const id of ["rssi1m", "pathLoss"]) $(id).addEventListener("input", refreshReadouts);
