@@ -239,12 +239,12 @@
 		<div class="container">
 			<header>
 				<h1>OpenTag Tracker</h1>
-				<p class="subtitle">XIAO nRF52840 BLE prototípus – közeli tracker, RSSI és saját pozíció.</p>
+				<p class="subtitle">XIAO nRF52840 BLE prototipe tracker.</p>
 			</header>
 
 			<div class="toolbar">
-				<button id="connectBtn" class="primary">Tracker keresése</button>
-				<button id="disconnectBtn" class="secondary" disabled="">Tracker leállítása</button>
+				<button id="connectBtn" class="primary">Search Tracker</button>
+				<button id="disconnectBtn" class="secondary" disabled="">Stop Tracking</button>
 				<label class="mode-toggle">
 					<span class="mode-toggle-label" id="modeLabel">Normal</span>
 					<span class="switch">
@@ -252,7 +252,6 @@
 							<span class="slider"></span>
 						</span>
 				</label>
-				<button id="locationBtn" class="secondary">Saját helyzet bekapcsolása</button>
 			</div>
 
 			<div class="grid">
@@ -260,15 +259,15 @@
 					<div class="status">
 						<span id="statusDot" class="dot"></span>
 						<div>
-							<strong id="statusText">Nincs tracker kiválasztva</strong>
-							<div id="statusSub" class="hint" style="margin-top:2px">Várakozás a BLE eszközre.</div>
+							<strong id="statusText">No tracker selected</strong>
+							<div id="statusSub" class="hint" style="margin-top:2px">Waiting for BLE device.</div>
 						</div>
 					</div>
 
-					<h2>Tracker adatai</h2>
+					<h2>Tracker data</h2>
 					<div class="metric-grid">
 						<div class="metric">
-							<div class="label">Név</div>
+							<div class="label">Name</div>
 							<div class="value" id="deviceName">–</div>
 						</div>
 						<div class="metric">
@@ -276,43 +275,26 @@
 							<div class="value" id="rssi">–</div>
 						</div>
 						<div class="metric">
-							<div class="label">Becsült távolság</div>
+							<div class="label">Estimated Distance</div>
 							<div class="value" id="distance">–</div>
 						</div>
 						<div class="metric">
-							<div class="label">Adási teljesítmény</div>
+							<div class="label">Transmission Power</div>
 							<div class="value" id="txPower">–</div>
 						</div>
 						<div class="metric">
-							<div class="label">Utolsó BLE csomag</div>
+							<div class="label">Last BLE Packet</div>
 							<div class="value" id="lastSeen">–</div>
 						</div>
 						<div class="metric">
-							<div class="label">Saját GPS pontosság</div>
+							<div class="label">Own GPS Accuray</div>
 							<div class="value" id="accuracy">–</div>
 						</div>
-						<div class="metric">
-							<div class="label">Tracker mód</div>
-							<div class="value" id="trackerMode">–</div>
-						</div>
-					</div>
-
-					<h2>Távolságbecslés beállítása</h2>
-					<label for="rssi1m">Kalibrált RSSI 1 méteren (dBm)</label>
-					<input id="rssi1m" type="number" step="1" value="-59" />
-					<label for="pathLoss">Környezeti tényező (n)</label>
-					<input id="pathLoss" type="number" step="0.1" min="1" max="5" value="2.0" />
-					<div class="hint">
-						A távolság csak becslés. A BLE RSSI erősen függ az antennától, testtől, falaktól és visszaverődésektől.
-						A pontosabb eredményhez mérd meg az RSSI-t 1 méteren, majd írd be az értéket.
-						A <b>környezeti tényező (n)</b> értékét több ismert távolság méréséből érdemes meghatározni.
-						A jelenlegi firmware-nél a webapp az RSSI-t az advertising csomagokból olvassa, ezért
-						GATT-kapcsolatot nem nyit.
 					</div>
 
 					<div class="map-legend">
-						<span class="pill">🔵 Saját pozíció</span>
-						<span class="pill">🟡 Tracker: BLE közelségi jelölő</span>
+						<span class="pill">🔵 Own Position</span>
+						<span class="pill">🟡 Tracker: BLE Distance</span>
 					</div>
 
 					<div id="log" class="log"></div>
@@ -340,26 +322,32 @@
 			let myPosition = null;
 			let trackerEstimateMarker = null;
 			let trackerDistanceCircle = null;
-			const CAL_TX_POWER = 4;     // dBm the 1 m RSSI is calibrated at (firmware NORMAL mode)
-			const LOST_TX_POWER = 8;    // dBm in firmware LOST mode
+			const CAL_TX_POWER = 4;
+			const LOST_TX_POWER = 8;
+
+			// Internal distance-calibration values.
+			// Kept out of the UI to keep the prototype simple.
+			const CAL_RSSI_1M = -59;
+			const PATH_LOSS_EXPONENT = 2.0;
 			const RSSI_WINDOW_MS = 8000;
 			const STALE_MS = 6000;
 			const UI_THROTTLE_MS = 250;
 
-			let rssiSamples = [];       // {t, r (raw), v (normalised to CAL_TX_POWER)}
+			let rssiSamples = [];
 			let smoothRaw = NaN;
 			let smoothNorm = NaN;
 			let lastTxPower = NaN;
 			let trackerMode = null;
 
-			let tracking = false;       // user has selected a tracker and not stopped it
-			let busy = false;           // GATT mode switch in progress
+			let tracking = false;
+			let busy = false;
 			let receiving = false;
 			let firstFix = true;
 			let lastUiUpdate = 0;
 
 			let advertisementController = null;
 			let advertisementWatching = false;
+			let advertisementListenerAttached = false;
 			let recoveryTimer = null;
 			let lastAdvertisementAt = 0;
 
@@ -397,13 +385,13 @@
 			const modeElement = $("trackerMode");
 			if (modeElement) {
 			modeElement.textContent =
-			mode === "lost" ? "ELVESZETT" :
+			mode === "lost" ? "LOST" :
 			mode === "normal" ? "NORMAL" : "–";
 			}
 
 			if (mode) {
 			$("modeToggle").checked = mode === "lost";
-			$("modeLabel").textContent = mode === "lost" ? "Elveszett" : "Normal";
+			$("modeLabel").textContent = mode === "lost" ? "Lost" : "Normal";
 			}
 			}
 
@@ -419,10 +407,11 @@
     }
 
     function estimateDistance(rssi) {
-      const rssi1m = parseFloat($("rssi1m").value);
-      const n = parseFloat($("pathLoss").value);
-      if (!Number.isFinite(rssi) || !Number.isFinite(rssi1m) || !Number.isFinite(n) || n <= 0) return NaN;
-			return Math.pow(10, (rssi1m - rssi) / (10 * n));
+      if (!Number.isFinite(rssi) || PATH_LOSS_EXPONENT <= 0) return NaN;
+			return Math.pow(
+			10,
+			(CAL_RSSI_1M - rssi) / (10 * PATH_LOSS_EXPONENT)
+			);
 			}
 
 			function median(values) {
@@ -439,8 +428,6 @@
 			}
 
 			function addRssiSample(rssi) {
-			// Normalise to the calibration TX power so NORMAL (+4 dBm) and LOST (+8 dBm)
-			// give comparable distance estimates.
 			const tx = Number.isFinite(lastTxPower) ? lastTxPower : (trackerMode === "lost" ? LOST_TX_POWER : CAL_TX_POWER);
 			const now = Date.now();
 			rssiSamples.push({ t: now, r: rssi, v: rssi - (tx - CAL_TX_POWER) });
@@ -462,11 +449,11 @@
 			if (!myPosition) return;
 			const hasD = Number.isFinite(d);
 			const markerText = hasD
-			? `BLE tracker közelségi jelölő<br>
-				Becsült távolság: ${formatDistance(d)}<br>
-					Az irányt a BLE RSSI önmagában nem határozza meg.`
-					: `BLE tracker közelségi jelölő<br>
-						RSSI alapján még nincs távolságbecslés.`;
+			? `BLE tracker proximity indicator<br>
+				Estimated distance: ${formatDistance(d)}<br>
+					Direction is not determined by BLE RSSI alone.`
+					: `BLE tracker proximity indicator<br>
+						No distance estimate based on RSSI yet.`;
 
 						if (!trackerEstimateMarker) {
 						trackerEstimateMarker = L.circleMarker(myPosition, {
@@ -480,9 +467,9 @@
 
 						if (!hasD) return;
 						const radius = Math.max(3, Math.min(d, 100));
-						const circleText = `BLE tracker becsült távolsága: ${formatDistance(d)}<br>
+						const circleText = `BLE tracker estimated distance: ${formatDistance(d)}<br>
 							` +
-							`Ez nem tényleges GPS-pozíció; csak RSSI-alapú távolságbecslés.`;
+							`It's not a real GPS-posizion; only RSSI-based estimation.`;
 
 							if (!trackerDistanceCircle) {
 							trackerDistanceCircle = L.circle(myPosition, {
@@ -511,8 +498,8 @@
 							} else {
 							myMarker.setLatLng(myPosition);
 							}
-							myMarker.bindPopup(`Saját helyzet<br>
-								Pontosság: ${Math.round(accuracy)} m`);
+							myMarker.bindPopup(`Current location<br>
+								Accuracy: ${Math.round(accuracy)} m`);
 
 								if (!accuracyCircle) {
 								accuracyCircle = L.circle(myPosition, {
@@ -537,29 +524,29 @@
 								function startLocation() {
 								if (locationWatchId !== null) return;
 								if (!navigator.geolocation) {
-								log("A böngésző nem támogatja a geolocation API-t.");
+								log("Browser does not support geolocation API.");
 								return;
 								}
 								locationWatchId = navigator.geolocation.watchPosition(
 								updateLocationMarker,
-								(error) => log(`Helymeghatározási hiba: ${error.message}`),
+								(error) => log(`Locating error: ${error.message}`),
 								{ enableHighAccuracy: true, maximumAge: 5000, timeout: 15000 }
 								);
-								$("locationBtn").disabled = true;
-								$("locationBtn").textContent = "Saját helyzet aktív";
-								log("Saját helyzet figyelése elindítva.");
+								log("Location service started.");
 								}
 
 								async function startAdvertisements() {
 								if (!tracking || !device) return false;
 								if (typeof device.watchAdvertisements !== "function") {
-								setStatus("BLE nem érhető el", "A böngésző nem támogatja az advertising figyelését.", "warn");
+								setStatus("BLE not available", "Browser does not support BLE listening.", "warn");
 								return false;
 								}
 
 								try {
-								// Adding the same listener twice is a no-op, so this is safe to repeat.
+								if (!advertisementListenerAttached) {
 								device.addEventListener("advertisementreceived", onAdvertisement);
+								advertisementListenerAttached = true;
+								}
 
 								if (advertisementController) {
 								try { advertisementController.abort(); } catch (_) {}
@@ -568,13 +555,13 @@
 								await device.watchAdvertisements({ signal: advertisementController.signal });
 
 								advertisementWatching = true;
-								log("BLE advertising figyelés aktív.");
+								log("Listening for BLE advertising is active.");
 								return true;
 								} catch (error) {
 								advertisementWatching = false;
-								if (error?.name === "AbortError") return false;  // expected on manual restart
-								log(`Advertising figyelési hiba: ${error.message}`);
-								setStatus("BLE figyelés hiba", "A figyelés nem indult el.", "warn");
+								if (error?.name === "AbortError") return false;
+								log(`Listening for advertising error: ${error.message}`);
+								setStatus("BLE listening error", "Listening did not start.", "warn");
 								return false;
 								}
 								}
@@ -587,9 +574,8 @@
 
 								if (age >= STALE_MS && receiving) {
 								receiving = false;
-								setStatus("Nincs friss jel", "Nem érkezik BLE csomag – a figyelést újraindítom.", "warn");
+								setStatus("No fresh packet", "No BLE packet – restarting the listening task.", "warn");
 								}
-								// Chrome can drop the watcher after visibility/adapter changes: re-arm it.
 								await startAdvertisements();
 								}
 
@@ -610,7 +596,6 @@
 								}
 								if (Number.isFinite(rssi)) addRssiSample(rssi);
 
-								// LOST mode advertises at 10 Hz; keep DOM/map work off the hot path.
 								if (now - lastUiUpdate < UI_THROTTLE_MS && receiving) return;
 								lastUiUpdate = now;
 
@@ -620,19 +605,19 @@
 
 								if (!receiving) {
 								receiving = true;
-								setStatus("Tracker érzékelve", Number.isFinite(rssi) ? "Advertising csomag érkezik." : "Advertising csomag érkezik, RSSI nélkül.", "ok");
+								setStatus("Tracker found", Number.isFinite(rssi) ? "Advertising packet arrived." : "Advertising packet arrived, without RSSI.", "ok");
 								}
 								}
 
 								async function connectTracker() {
 								if (!navigator.bluetooth) {
-								setStatus("Web Bluetooth nem érhető el", "Próbáld Chromium-alapú böngészőben HTTPS-en vagy localhoston.", "danger");
-								log("navigator.bluetooth nem érhető el.");
+								setStatus("Web Bluetooth not supported", "Try a Chromium-based browser with HTTPS or localhost.", "danger");
+								log("navigator.bluetooth not available.");
 								return;
 								}
 
 								try {
-								log(`BLE eszköz keresése: ${TRACKER_NAME}`);
+								log(`Searching BLE device: ${TRACKER_NAME}`);
 								device = await navigator.bluetooth.requestDevice({
 								filters: [{ name: TRACKER_NAME }],
 								optionalServices: [CONTROL_SERVICE_UUID]
@@ -645,92 +630,166 @@
 								setTrackerMode(null);
 
 								setConnectedUI(true);
-								setStatus("Tracker kiválasztva", "BLE advertising figyelés indítása…", "ok");
-								log("A GATT módvezérlés elérhetővé lett kérve; a tartós GATT kapcsolatot nem tartjuk fenn.");
+								setStatus("Tracker selected", "Reading current tracker mode…", "ok");
+								log("Reading the tracker's current mode over GATT.");
 
+								try {
+								await readCurrentMode();
+								} catch (modeError) {
+								log(`Current mode read failed: ${modeError.message}`);
+								// We do not write a fallback value to the tracker.
+								setTrackerMode("normal");
+								setStatus(
+								"Tracker selected",
+								"Current mode could not be read; starting advertising.",
+								"warn"
+								);
+								}
+
+								if (tracking) {
 								await startAdvertisements();
-								startRecoveryTimer();  // also retries if the first start failed
+								startRecoveryTimer();
+								}
 
 								if (!myPosition && !locationWatchId) {
 								startLocation();
 								}
 								} catch (error) {
 								if (error && error.name === "NotFoundError") {
-								log("A felhasználó nem választott trackert.");
+								log("User didn't chose a tracker.");
 								return;
 								}
-								log(`BLE hiba: ${error.message}`);
-								setStatus("BLE hiba", error.message, "");
+								log(`BLE error: ${error.message}`);
+								setStatus("BLE error", error.message, "");
 								}
 								}
 
+
+								async function readCurrentMode() {
+								if (!device?.gatt) {
+								throw new Error("Tracker GATT interface unavailable.");
+								}
+
+								const step = async (name, promise, ms = 10000) => {
+								log(`GATT: ${name}…`);
+								let timer;
+								const timeout = new Promise((_, reject) => {
+								timer = setTimeout(() => reject(new Error(`Timeout: ${name}`)), ms);
+								});
+								try {
+								return await Promise.race([promise, timeout]);
+								} finally {
+								clearTimeout(timer);
+								}
+								};
+
+								const server = await step(
+								"connecting to read current mode",
+								device.gatt.connect(),
+								20000
+								);
+
+								try {
+								const service = await step(
+								"current mode service search",
+								server.getPrimaryService(CONTROL_SERVICE_UUID),
+								10000
+								);
+
+								const characteristic = await step(
+								"current mode characteristic search",
+								service.getCharacteristic(MODE_CHARACTERISTIC_UUID),
+								10000
+								);
+
+								const value = (
+								await step("current mode read", characteristic.readValue(), 10000)
+								).getUint8(0);
+
+								if (value === 0) {
+								setTrackerMode("normal");
+								log("Current tracker mode: NORMAL (0)");
+								} else if (value === 1) {
+								setTrackerMode("lost");
+								log("Current tracker mode: LOST (1)");
+								} else {
+								throw new Error(`Unknown tracker mode value: ${value}`);
+								}
+								} finally {
+								try {
+								if (device?.gatt?.connected) {
+								device.gatt.disconnect();
+								}
+								} catch (_) {}
+								}
+
+								// Give the tracker time to resume advertising.
+								await sleep(350);
+								}
 
 								function syncModeToggle() {
 								$("modeToggle").checked = trackerMode === "lost";
-								$("modeLabel").textContent = trackerMode === "lost" ? "Elveszett" : "Normal";
+								$("modeLabel").textContent = trackerMode === "lost" ? "Lost" : "Normal";
 								}
 
 								async function setRemoteMode(mode) {
 								const dev = device;
 								if (!tracking || !dev?.gatt || busy) {
-								if (!dev?.gatt) setStatus("Nincs tracker", "Előbb válaszd ki az OpenTag-Test eszközt.", "warn");
+								if (!dev?.gatt) setStatus("No tracker", "Fist connect to OpenTag.", "warn");
 								syncModeToggle();
 								return;
 								}
 
 								const value = mode === "lost" ? 1 : 0;
-								const label = mode === "lost" ? "ELVESZETT" : "NORMAL";
+								const label = mode === "lost" ? "LOST" : "NORMAL";
 
 								busy = true;
 								$("modeToggle").disabled = true;
-								setStatus("GATT kapcsolat", `${label} mód küldése…`, "warn");
+								setStatus("GATT connection", `Sending ${label} mode…`, "warn");
 
 								try {
-								// Stop the advertisement watcher before opening the short GATT connection.
 								if (advertisementController) advertisementController.abort();
 								advertisementController = null;
 								advertisementWatching = false;
 
-								await sleep(400);  // let the scan actually stop before connecting
+								await sleep(400);
 
 								const step = async (name, promise, ms = 10000) => {
 								log(`GATT: ${name}…`);
 								let timer;
 								const timeout = new Promise((_, rej) => {
-								timer = setTimeout(() => rej(new Error(`Időtúllépés: ${name}`)), ms);
+								timer = setTimeout(() => rej(new Error(`Timeout: ${name}`)), ms);
 								});
 								try { return await Promise.race([promise, timeout]); }
 								finally { clearTimeout(timer); }
 								};
 
-								const server = await step("csatlakozás", dev.gatt.connect(), 20000);
-								const service = await step("service keresése", server.getPrimaryService(CONTROL_SERVICE_UUID), 20000);
-								const characteristic = await step("characteristic keresése", service.getCharacteristic(MODE_CHARACTERISTIC_UUID));
+								const server = await step("connecting", dev.gatt.connect(), 20000);
+								const service = await step("service search", server.getPrimaryService(CONTROL_SERVICE_UUID), 20000);
+								const characteristic = await step("characteristic search", service.getCharacteristic(MODE_CHARACTERISTIC_UUID));
 
-								await step("írás", characteristic.writeValueWithResponse(new Uint8Array([value])));
-								log(`GATT írás sikeres: ${value}`);
+								await step("write", characteristic.writeValueWithResponse(new Uint8Array([value])));
+								log(`GATT write successful: ${value}`);
 
-								await sleep(80);  // let the firmware callback update the stored value
-								const actual = (await step("visszaolvasás", characteristic.readValue())).getUint8(0);
-								log(`GATT visszaolvasás: ${actual}`);
+								await sleep(80);
+								const actual = (await step("readback", characteristic.readValue())).getUint8(0);
+								log(`GATT readback: ${actual}`);
 								if (actual !== value) {
-								throw new Error(`A tracker nem igazolta vissza a módváltást (várt ${value}, kapott ${actual}).`);
+								throw new Error(`Tracker has not responded to  mode change (waited ${value}, received ${actual}).`);
 								}
 
 								setTrackerMode(mode);
-								// TX power (and so RSSI) changes with the mode: drop the old window.
 								resetSignalState();
-								setStatus("Módváltás kész", `${label} mód aktív.`, "ok");
+								setStatus("Mode change complete", `${label} mode active.`, "ok");
 								} catch (error) {
 								syncModeToggle();
-								log(`GATT módváltási hiba: ${error.name || "Error"}: ${error.message}`);
-								setStatus("GATT hiba", error.message, "warn");
+								log(`GATT mode change error: ${error.name || "Error"}: ${error.message}`);
+								setStatus("GATT error", error.message, "warn");
 								} finally {
 								try { if (dev.gatt?.connected) dev.gatt.disconnect(); } catch (_) {}
 								busy = false;
 								$("modeToggle").disabled = !tracking;
 								if (tracking) {
-								// Give the XIAO a moment to restart advertising with the new mode.
 								await sleep(350);
 								lastAdvertisementAt = Date.now();
 								await startAdvertisements();
@@ -749,7 +808,10 @@
 								lastAdvertisementAt = 0;
 
 								if (device) {
+								if (advertisementListenerAttached) {
 								try { device.removeEventListener("advertisementreceived", onAdvertisement); } catch (_) {}
+								}
+								advertisementListenerAttached = false;
 								try { if (device.gatt?.connected) device.gatt.disconnect(); } catch (_) {}
 								}
 								device = null;
@@ -757,7 +819,7 @@
 								resetSignalState();
 								setTrackerMode(null);
 								setConnectedUI(false);
-								setStatus("Nincs tracker kiválasztva", "Várakozás a BLE eszközre.", "");
+								setStatus("No tracker connected", "Waiting for BLE devices.", "");
 								for (const id of ["deviceName", "rssi", "distance", "txPower"]) $(id).textContent = "–";
 
 								for (const layer of [trackerEstimateMarker, trackerDistanceCircle]) {
@@ -774,13 +836,12 @@
 								$("disconnectBtn").addEventListener("click", disconnectTracker);
 								$("modeToggle").addEventListener("change", (event) => {
 								const mode = event.target.checked ? "lost" : "normal";
-								log(`Webapp: módváltás kérése → ${mode === "lost" ? "ELVESZETT" : "NORMAL"}`);
+								log(`Webapp: modeswitch request → ${mode === "lost" ? "LOST" : "NORMAL"}`);
 								setRemoteMode(mode);
 								});
-								$("locationBtn").addEventListener("click", startLocation);
 								for (const id of ["rssi1m", "pathLoss"]) $(id).addEventListener("input", refreshReadouts);
 
-								log(`Elvárt tracker: ${TRACKER_NAME}`);
+								log(`Required name of tracker: ${TRACKER_NAME}`);
 							</script>
 	</body>
 </html>
