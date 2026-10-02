@@ -1,0 +1,754 @@
+<!doctype html>
+<html lang="hu">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>OpenTag – BLE Tracker</title>
+  <link
+    rel="stylesheet"
+    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+    crossorigin=""
+  />
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0b0f14;
+      --panel: #121821;
+      --panel-2: #19212c;
+      --text: #eef2f7;
+      --muted: #9aa7b5;
+      --border: #273241;
+      --accent: #6ea8fe;
+      --ok: #56d364;
+      --warn: #e3b341;
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+    }
+
+    .container {
+      width: min(1200px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: 28px 0 40px;
+    }
+
+    header { margin-bottom: 22px; }
+    h1 { margin: 0 0 8px; font-size: clamp(28px, 4vw, 42px); }
+    .subtitle { color: var(--muted); margin: 0; }
+
+    .mode-toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 12px;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: var(--panel-2);
+      margin: 0;
+    }
+    .mode-toggle-label {
+      font-size: 13px;
+      font-weight: 700;
+      min-width: 72px;
+    }
+    .switch {
+      position: relative;
+      display: inline-block;
+      width: 52px;
+      height: 28px;
+    }
+    .switch input {
+      opacity: 0;
+      width: 0;
+      height: 0;
+    }
+    .slider {
+      position: absolute;
+      inset: 0;
+      cursor: pointer;
+      background: #374151;
+      border-radius: 999px;
+      transition: .15s;
+    }
+    .slider::before {
+      content: "";
+      position: absolute;
+      width: 20px;
+      height: 20px;
+      left: 4px;
+      top: 4px;
+      border-radius: 50%;
+      background: #fff;
+      transition: .15s;
+    }
+    .switch input:checked + .slider {
+      background: #d4a900;
+    }
+    .switch input:checked + .slider::before {
+      transform: translateX(24px);
+    }
+    .switch input:disabled + .slider {
+      opacity: .45;
+      cursor: not-allowed;
+    }
+
+    .toolbar {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin: 20px 0;
+    }
+
+    button, input {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: var(--panel-2);
+      color: var(--text);
+      font: inherit;
+    }
+
+    button {
+      padding: 11px 15px;
+      cursor: pointer;
+    }
+    button:hover { border-color: var(--accent); }
+    button.primary { background: var(--accent); color: #08111f; border-color: var(--accent); font-weight: 700; }
+    button.secondary { background: transparent; }
+    button:disabled { opacity: .45; cursor: not-allowed; }
+
+    .grid {
+      display: grid;
+      grid-template-columns: 360px 1fr;
+      gap: 18px;
+    }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 18px;
+      box-shadow: 0 10px 30px rgba(0,0,0,.18);
+    }
+
+    .panel h2 { font-size: 17px; margin: 0 0 14px; }
+
+    .status {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 16px;
+      padding: 12px;
+      border-radius: 12px;
+      background: var(--panel-2);
+    }
+
+    .dot {
+      width: 11px; height: 11px; border-radius: 999px; background: #f85149;
+      box-shadow: 0 0 0 4px rgba(248,81,73,.12);
+      flex: 0 0 auto;
+    }
+    .dot.ok { background: var(--ok); box-shadow: 0 0 0 4px rgba(86,211,100,.12); }
+    .dot.warn { background: var(--warn); box-shadow: 0 0 0 4px rgba(227,179,65,.12); }
+
+    .metric-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      margin: 12px 0 18px;
+    }
+
+    .metric {
+      background: var(--panel-2);
+      border-radius: 12px;
+      padding: 12px;
+      min-height: 80px;
+    }
+    .metric .label { font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+    .metric .value { font-weight: 700; font-size: 20px; }
+
+    label {
+      display: block;
+      color: var(--muted);
+      font-size: 13px;
+      margin: 12px 0 6px;
+    }
+    input { width: 100%; padding: 10px 12px; }
+
+    .hint {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.5;
+      margin-top: 12px;
+    }
+
+    #map {
+      min-height: 610px;
+      height: calc(100vh - 250px);
+      max-height: 760px;
+      border-radius: 14px;
+      overflow: hidden;
+      background: #dfe7ef;
+    }
+
+    .log {
+      margin-top: 18px;
+      max-height: 170px;
+      overflow: auto;
+      background: #0a0d12;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 10px 12px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 11px;
+      line-height: 1.5;
+      white-space: pre-wrap;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      border-radius: 999px;
+      padding: 5px 9px;
+      background: var(--panel-2);
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .map-legend {
+      margin-top: 10px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    @media (max-width: 900px) {
+      .grid { grid-template-columns: 1fr; }
+      #map { min-height: 460px; height: 60vh; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>OpenTag Tracker</h1>
+      <p class="subtitle">XIAO nRF52840 BLE prototípus – közeli tracker, RSSI és saját pozíció.</p>
+    </header>
+
+    <div class="toolbar">
+      <button id="connectBtn" class="primary">Tracker keresése</button>
+      <button id="disconnectBtn" class="secondary" disabled>Tracker leállítása</button>
+      <label class="mode-toggle">
+        <span class="mode-toggle-label" id="modeLabel">Normal</span>
+        <span class="switch">
+          <input id="modeToggle" type="checkbox" disabled>
+          <span class="slider"></span>
+        </span>
+      </label>
+      <button id="locationBtn" class="secondary">Saját helyzet bekapcsolása</button>
+    </div>
+
+    <div class="grid">
+      <section class="panel">
+        <div class="status">
+          <span id="statusDot" class="dot"></span>
+          <div>
+            <strong id="statusText">Nincs tracker kiválasztva</strong>
+            <div id="statusSub" class="hint" style="margin-top:2px">Várakozás a BLE eszközre.</div>
+          </div>
+        </div>
+
+        <h2>Tracker adatai</h2>
+        <div class="metric-grid">
+          <div class="metric"><div class="label">Név</div><div class="value" id="deviceName">–</div></div>
+          <div class="metric"><div class="label">RSSI</div><div class="value" id="rssi">–</div></div>
+          <div class="metric"><div class="label">Becsült távolság</div><div class="value" id="distance">–</div></div>
+          <div class="metric"><div class="label">Adási teljesítmény</div><div class="value" id="txPower">–</div></div>
+          <div class="metric"><div class="label">Utolsó BLE csomag</div><div class="value" id="lastSeen">–</div></div>
+          <div class="metric"><div class="label">Saját GPS pontosság</div><div class="value" id="accuracy">–</div></div>
+          <div class="metric"><div class="label">Tracker mód</div><div class="value" id="trackerMode">–</div></div>
+        </div>
+
+        <h2>Távolságbecslés beállítása</h2>
+        <label for="rssi1m">Kalibrált RSSI 1 méteren (dBm)</label>
+        <input id="rssi1m" type="number" step="1" value="-59" />
+        <label for="pathLoss">Környezeti tényező (n)</label>
+        <input id="pathLoss" type="number" step="0.1" min="1" max="5" value="2.0" />
+        <div class="hint">
+          A távolság csak becslés. A BLE RSSI erősen függ az antennától, testtől, falaktól és visszaverődésektől.
+          A pontosabb eredményhez mérd meg az RSSI-t 1 méteren, majd írd be az értéket.
+          A <b>környezeti tényező (n)</b> értékét több ismert távolság méréséből érdemes meghatározni.
+          A jelenlegi firmware-nél a webapp az RSSI-t az advertising csomagokból olvassa, ezért
+          GATT-kapcsolatot nem nyit.
+        </div>
+
+        <div class="map-legend">
+          <span class="pill">🔵 Saját pozíció</span>
+          <span class="pill">🟡 Tracker: BLE közelségi jelölő</span>
+        </div>
+
+        <div id="log" class="log"></div>
+      </section>
+
+      <section class="panel" style="padding: 10px">
+        <div id="map"></div>
+      </section>
+    </div>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+    integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+    crossorigin=""></script>
+  <script>
+    const TRACKER_NAME = "OpenTag-Test";
+    const CONTROL_SERVICE_UUID = "19b10000-e8f2-537e-4f6c-d104768a1214";
+    const MODE_CHARACTERISTIC_UUID = "19b10001-e8f2-537e-4f6c-d104768a1214";
+
+    const $ = (id) => document.getElementById(id);
+    let device = null;
+    let locationWatchId = null;
+    let myMarker = null;
+    let accuracyCircle = null;
+    let myPosition = null;
+    let trackerEstimateMarker = null;
+    let trackerDistanceCircle = null;
+    const CAL_TX_POWER = 4;     // dBm the 1 m RSSI is calibrated at (firmware NORMAL mode)
+    const LOST_TX_POWER = 8;    // dBm in firmware LOST mode
+    const RSSI_WINDOW_MS = 8000;
+    const STALE_MS = 6000;
+    const UI_THROTTLE_MS = 250;
+
+    let rssiSamples = [];       // {t, r (raw), v (normalised to CAL_TX_POWER)}
+    let smoothRaw = NaN;
+    let smoothNorm = NaN;
+    let lastTxPower = NaN;
+    let trackerMode = null;
+
+    let tracking = false;       // user has selected a tracker and not stopped it
+    let busy = false;           // GATT mode switch in progress
+    let receiving = false;
+    let firstFix = true;
+    let lastUiUpdate = 0;
+
+    let advertisementController = null;
+    let advertisementWatching = false;
+    let recoveryTimer = null;
+    let lastAdvertisementAt = 0;
+
+    const map = L.map("map").setView([47.4979, 19.0402], 12);
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      maxZoom: 19,
+      attribution: '&copy; OpenStreetMap közreműködők'
+    }).addTo(map);
+
+    function log(message) {
+      const stamp = new Date().toLocaleTimeString("hu-HU");
+      $("log").textContent += `[${stamp}] ${message}\n`;
+      $("log").scrollTop = $("log").scrollHeight;
+    }
+
+    function setStatus(text, sub = "", type = "") {
+      $("statusText").textContent = text;
+      $("statusSub").textContent = sub;
+      $("statusDot").className = `dot ${type}`.trim();
+    }
+
+    function setConnectedUI(connected) {
+      $("disconnectBtn").disabled = !connected;
+      $("connectBtn").disabled = connected;
+      $("modeToggle").disabled = !connected;
+      if (!connected) {
+        $("modeToggle").checked = false;
+        $("modeLabel").textContent = "Normal";
+      }
+    }
+
+    function setTrackerMode(mode) {
+      trackerMode = mode;
+      $("trackerMode").textContent =
+        mode === "lost" ? "ELVESZETT" :
+        mode === "normal" ? "NORMAL" : "–";
+
+      if (mode) {
+        $("modeToggle").checked = mode === "lost";
+        $("modeLabel").textContent = mode === "lost" ? "Elveszett" : "Normal";
+      }
+    }
+
+    function sleep(ms) {
+      return new Promise(resolve => setTimeout(resolve, ms));
+    }
+
+    function formatDistance(m) {
+      if (!Number.isFinite(m)) return "–";
+      if (m < 1) return `${Math.round(m * 100)} cm`;
+      if (m < 10) return `${m.toFixed(1)} m`;
+      return `${m.toFixed(0)} m`;
+    }
+
+    function estimateDistance(rssi) {
+      const rssi1m = parseFloat($("rssi1m").value);
+      const n = parseFloat($("pathLoss").value);
+      if (!Number.isFinite(rssi) || !Number.isFinite(rssi1m) || !Number.isFinite(n) || n <= 0) return NaN;
+      return Math.pow(10, (rssi1m - rssi) / (10 * n));
+    }
+
+    function median(values) {
+      const a = [...values].sort((x, y) => x - y);
+      const m = a.length >> 1;
+      return a.length % 2 ? a[m] : (a[m - 1] + a[m]) / 2;
+    }
+
+    function resetSignalState() {
+      rssiSamples = [];
+      smoothRaw = smoothNorm = lastTxPower = NaN;
+      receiving = false;
+      $("lastSeen").textContent = "–";
+    }
+
+    function addRssiSample(rssi) {
+      // Normalise to the calibration TX power so NORMAL (+4 dBm) and LOST (+8 dBm)
+      // give comparable distance estimates.
+      const tx = Number.isFinite(lastTxPower) ? lastTxPower : (trackerMode === "lost" ? LOST_TX_POWER : CAL_TX_POWER);
+      const now = Date.now();
+      rssiSamples.push({ t: now, r: rssi, v: rssi - (tx - CAL_TX_POWER) });
+      while (rssiSamples.length > 25 || (rssiSamples.length && now - rssiSamples[0].t > RSSI_WINDOW_MS)) {
+        rssiSamples.shift();
+      }
+      smoothRaw = median(rssiSamples.map(x => x.r));
+      smoothNorm = median(rssiSamples.map(x => x.v));
+    }
+
+    function refreshReadouts() {
+      const d = estimateDistance(smoothNorm);
+      $("rssi").textContent = Number.isFinite(smoothRaw) ? `${Math.round(smoothRaw)} dBm` : "–";
+      $("distance").textContent = Number.isFinite(d) ? formatDistance(d) : "–";
+      updateTrackerMarker(d);
+    }
+
+    function updateTrackerMarker(d = estimateDistance(smoothNorm)) {
+      if (!myPosition) return;
+      const hasD = Number.isFinite(d);
+      const markerText = hasD
+        ? `BLE tracker közelségi jelölő<br>Becsült távolság: ${formatDistance(d)}<br>Az irányt a BLE RSSI önmagában nem határozza meg.`
+        : `BLE tracker közelségi jelölő<br>RSSI alapján még nincs távolságbecslés.`;
+
+      if (!trackerEstimateMarker) {
+        trackerEstimateMarker = L.circleMarker(myPosition, {
+          radius: 5, color: "#111827", weight: 2,
+          fillColor: "#facc15", fillOpacity: 1, pane: "markerPane"
+        }).bindPopup(markerText).addTo(map);
+      } else {
+        trackerEstimateMarker.setLatLng(myPosition);
+        trackerEstimateMarker.getPopup().setContent(markerText);
+      }
+
+      if (!hasD) return;
+      const radius = Math.max(3, Math.min(d, 100));
+      const circleText = `BLE tracker becsült távolsága: ${formatDistance(d)}<br>` +
+        `Ez nem tényleges GPS-pozíció; csak RSSI-alapú távolságbecslés.`;
+
+      if (!trackerDistanceCircle) {
+        trackerDistanceCircle = L.circle(myPosition, {
+          radius, color: "#facc15", fillColor: "#facc15",
+          fillOpacity: 0.10, weight: 2, dashArray: "6 6"
+        }).bindPopup(circleText).addTo(map);
+      } else {
+        trackerDistanceCircle.setLatLng(myPosition);
+        trackerDistanceCircle.setRadius(radius);
+        trackerDistanceCircle.getPopup().setContent(circleText);
+      }
+    }
+
+    function updateLocationMarker(position) {
+      const { latitude, longitude, accuracy } = position.coords;
+      myPosition = [latitude, longitude];
+
+      if (!myMarker) {
+        myMarker = L.circleMarker(myPosition, {
+          radius: 8,
+          color: "#2f81f7",
+          fillColor: "#2f81f7",
+          fillOpacity: 0.9,
+          weight: 2
+        }).addTo(map);
+      } else {
+        myMarker.setLatLng(myPosition);
+      }
+      myMarker.bindPopup(`Saját helyzet<br>Pontosság: ${Math.round(accuracy)} m`);
+
+      if (!accuracyCircle) {
+        accuracyCircle = L.circle(myPosition, {
+          radius: accuracy,
+          color: "#2f81f7",
+          fillOpacity: 0.05,
+          weight: 1
+        }).addTo(map);
+      } else {
+        accuracyCircle.setLatLng(myPosition);
+        accuracyCircle.setRadius(accuracy);
+      }
+
+      $("accuracy").textContent = `${Math.round(accuracy)} m`;
+      if (firstFix) {
+        firstFix = false;
+        map.setView(myPosition, Math.max(map.getZoom(), 15));
+      }
+      updateTrackerMarker();
+    }
+
+    function startLocation() {
+      if (locationWatchId !== null) return;
+      if (!navigator.geolocation) {
+        log("A böngésző nem támogatja a geolocation API-t.");
+        return;
+      }
+      locationWatchId = navigator.geolocation.watchPosition(
+        updateLocationMarker,
+        (error) => log(`Helymeghatározási hiba: ${error.message}`),
+        { enableHighAccuracy: true, maximumAge: 5000, timeout: 15000 }
+      );
+      $("locationBtn").disabled = true;
+      $("locationBtn").textContent = "Saját helyzet aktív";
+      log("Saját helyzet figyelése elindítva.");
+    }
+
+    async function startAdvertisements() {
+      if (!tracking || !device) return false;
+      if (typeof device.watchAdvertisements !== "function") {
+        setStatus("BLE nem érhető el", "A böngésző nem támogatja az advertising figyelését.", "warn");
+        return false;
+      }
+
+      try {
+        // Adding the same listener twice is a no-op, so this is safe to repeat.
+        device.addEventListener("advertisementreceived", onAdvertisement);
+
+        if (advertisementController) {
+          try { advertisementController.abort(); } catch (_) {}
+        }
+        advertisementController = new AbortController();
+        await device.watchAdvertisements({ signal: advertisementController.signal });
+
+        advertisementWatching = true;
+        log("BLE advertising figyelés aktív.");
+        return true;
+      } catch (error) {
+        advertisementWatching = false;
+        if (error?.name === "AbortError") return false;  // expected on manual restart
+        log(`Advertising figyelési hiba: ${error.message}`);
+        setStatus("BLE figyelés hiba", "A figyelés nem indult el.", "warn");
+        return false;
+      }
+    }
+
+    async function recoverAdvertisements() {
+      if (!tracking || busy) return;
+
+      const age = Date.now() - lastAdvertisementAt;
+      if (age < 5000 && advertisementWatching) return;
+
+      if (age >= STALE_MS && receiving) {
+        receiving = false;
+        setStatus("Nincs friss jel", "Nem érkezik BLE csomag – a figyelést újraindítom.", "warn");
+      }
+      // Chrome can drop the watcher after visibility/adapter changes: re-arm it.
+      await startAdvertisements();
+    }
+
+    function startRecoveryTimer() {
+      if (recoveryTimer) clearInterval(recoveryTimer);
+      recoveryTimer = setInterval(recoverAdvertisements, 5000);
+    }
+
+    function onAdvertisement(event) {
+      if (!tracking) return;
+      const rssi = Number(event.rssi);
+      const now = Date.now();
+      lastAdvertisementAt = now;
+      advertisementWatching = true;
+
+      if (typeof event.txPower === "number" && Number.isFinite(event.txPower)) {
+        lastTxPower = event.txPower;
+      }
+      if (Number.isFinite(rssi)) addRssiSample(rssi);
+
+      // LOST mode advertises at 10 Hz; keep DOM/map work off the hot path.
+      if (now - lastUiUpdate < UI_THROTTLE_MS && receiving) return;
+      lastUiUpdate = now;
+
+      $("lastSeen").textContent = new Date(now).toLocaleTimeString("hu-HU");
+      if (Number.isFinite(lastTxPower)) $("txPower").textContent = `${lastTxPower} dBm`;
+      if (Number.isFinite(rssi)) refreshReadouts();
+
+      if (!receiving) {
+        receiving = true;
+        setStatus("Tracker érzékelve", Number.isFinite(rssi) ? "Advertising csomag érkezik." : "Advertising csomag érkezik, RSSI nélkül.", "ok");
+      }
+    }
+
+    async function connectTracker() {
+      if (!navigator.bluetooth) {
+        setStatus("Web Bluetooth nem érhető el", "Próbáld Chromium-alapú böngészőben HTTPS-en vagy localhoston.", "danger");
+        log("navigator.bluetooth nem érhető el.");
+        return;
+      }
+
+      try {
+        log(`BLE eszköz keresése: ${TRACKER_NAME}`);
+        device = await navigator.bluetooth.requestDevice({
+          filters: [{ name: TRACKER_NAME }],
+          optionalServices: [CONTROL_SERVICE_UUID]
+        });
+
+        $("deviceName").textContent = device.name || TRACKER_NAME;
+        resetSignalState();
+        tracking = true;
+        lastAdvertisementAt = Date.now();
+        setTrackerMode(null);
+
+        setConnectedUI(true);
+        setStatus("Tracker kiválasztva", "BLE advertising figyelés indítása…", "ok");
+        log("A GATT módvezérlés elérhetővé lett kérve; a tartós GATT kapcsolatot nem tartjuk fenn.");
+
+        await startAdvertisements();
+        startRecoveryTimer();  // also retries if the first start failed
+
+        if (!myPosition && !locationWatchId) {
+          startLocation();
+        }
+      } catch (error) {
+        if (error && error.name === "NotFoundError") {
+          log("A felhasználó nem választott trackert.");
+          return;
+        }
+        log(`BLE hiba: ${error.message}`);
+        setStatus("BLE hiba", error.message, "");
+      }
+    }
+
+
+    function syncModeToggle() {
+      $("modeToggle").checked = trackerMode === "lost";
+      $("modeLabel").textContent = trackerMode === "lost" ? "Elveszett" : "Normal";
+    }
+
+    async function setRemoteMode(mode) {
+      const dev = device;
+      if (!tracking || !dev?.gatt || busy) {
+        if (!dev?.gatt) setStatus("Nincs tracker", "Előbb válaszd ki az OpenTag-Test eszközt.", "warn");
+        syncModeToggle();
+        return;
+      }
+
+      const value = mode === "lost" ? 1 : 0;
+      const label = mode === "lost" ? "ELVESZETT" : "NORMAL";
+
+      busy = true;
+      $("modeToggle").disabled = true;
+      setStatus("GATT kapcsolat", `${label} mód küldése…`, "warn");
+
+      try {
+        // Stop the advertisement watcher before opening the short GATT connection.
+        if (advertisementController) advertisementController.abort();
+        advertisementController = null;
+        advertisementWatching = false;
+
+        await sleep(400);  // let the scan actually stop before connecting
+
+        const step = async (name, promise, ms = 10000) => {
+          log(`GATT: ${name}…`);
+          let timer;
+          const timeout = new Promise((_, rej) => {
+            timer = setTimeout(() => rej(new Error(`Időtúllépés: ${name}`)), ms);
+          });
+          try { return await Promise.race([promise, timeout]); }
+          finally { clearTimeout(timer); }
+        };
+
+        const server = await step("csatlakozás", dev.gatt.connect(), 20000);
+        const service = await step("service keresése", server.getPrimaryService(CONTROL_SERVICE_UUID), 20000);
+        const characteristic = await step("characteristic keresése", service.getCharacteristic(MODE_CHARACTERISTIC_UUID));
+
+        await step("írás", characteristic.writeValueWithResponse(new Uint8Array([value])));
+        log(`GATT írás sikeres: ${value}`);
+
+        await sleep(80);  // let the firmware callback update the stored value
+        const actual = (await step("visszaolvasás", characteristic.readValue())).getUint8(0);
+        log(`GATT visszaolvasás: ${actual}`);
+        if (actual !== value) {
+          throw new Error(`A tracker nem igazolta vissza a módváltást (várt ${value}, kapott ${actual}).`);
+        }
+
+        setTrackerMode(mode);
+        // TX power (and so RSSI) changes with the mode: drop the old window.
+        resetSignalState();
+        setStatus("Módváltás kész", `${label} mód aktív.`, "ok");
+      } catch (error) {
+        syncModeToggle();
+        log(`GATT módváltási hiba: ${error.name || "Error"}: ${error.message}`);
+        setStatus("GATT hiba", error.message, "warn");
+      } finally {
+        try { if (dev.gatt?.connected) dev.gatt.disconnect(); } catch (_) {}
+        busy = false;
+        $("modeToggle").disabled = !tracking;
+        if (tracking) {
+          // Give the XIAO a moment to restart advertising with the new mode.
+          await sleep(350);
+          lastAdvertisementAt = Date.now();
+          await startAdvertisements();
+        }
+      }
+    }
+
+    function disconnectTracker() {
+      tracking = false;
+      if (recoveryTimer) { clearInterval(recoveryTimer); recoveryTimer = null; }
+      if (advertisementController) {
+        try { advertisementController.abort(); } catch (_) {}
+        advertisementController = null;
+      }
+      advertisementWatching = false;
+      lastAdvertisementAt = 0;
+
+      if (device) {
+        try { device.removeEventListener("advertisementreceived", onAdvertisement); } catch (_) {}
+        try { if (device.gatt?.connected) device.gatt.disconnect(); } catch (_) {}
+      }
+      device = null;
+
+      resetSignalState();
+      setTrackerMode(null);
+      setConnectedUI(false);
+      setStatus("Nincs tracker kiválasztva", "Várakozás a BLE eszközre.", "");
+      for (const id of ["deviceName", "rssi", "distance", "txPower"]) $(id).textContent = "–";
+
+      for (const layer of [trackerEstimateMarker, trackerDistanceCircle]) {
+        if (layer) map.removeLayer(layer);
+      }
+      trackerEstimateMarker = trackerDistanceCircle = null;
+    }
+
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible" && tracking && !busy) startAdvertisements();
+    });
+
+    $("connectBtn").addEventListener("click", connectTracker);
+    $("disconnectBtn").addEventListener("click", disconnectTracker);
+    $("modeToggle").addEventListener("change", (event) => {
+      setRemoteMode(event.target.checked ? "lost" : "normal");
+    });
+    $("locationBtn").addEventListener("click", startLocation);
+    for (const id of ["rssi1m", "pathLoss"]) $(id).addEventListener("input", refreshReadouts);
+
+    log(`Elvárt tracker: ${TRACKER_NAME}`);
+  </script>
+</body>
+</html>
