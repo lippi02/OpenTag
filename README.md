@@ -23,7 +23,7 @@ Same goes for browsers. Chromium browsers will 100% work, but I don't know what 
 # Hosting it from TrueNAS
 9. Install NGINX Proxy Manager Plus (Use Host Path, instead of ixVolume)
 10. Create a DDNS (I used [No-IP](noip.com), but you can use whatever you want)
-11. Move the index html into the NGINX's host folder eg:\\TRUENAS\apps\nginxpmplus\opentag (This is a generic location, you may have to change it according to your setup)
+11. Move the index html into the NGINX's host folder eg: \\TRUENAS\apps\nginxpmplus\opentag (This is a generic location, you may have to change it according to your setup)
 12. Create a Proxy Host, where: Domain Name {Your DDNS}; Scheme: path:; Forward Hostname / IP / Path: /data/opentag/ (You may have to change it according to your setup); Leave everything else as is
 13. Switch to TLS, Request a new Certificate; Force HTTPS; Leave everything else as is\
     (You may have to open a port on your router if NGINX throws an error: (This may differ between manufacturers))
