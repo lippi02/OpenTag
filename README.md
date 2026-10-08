@@ -1,5 +1,5 @@
 # OpenTag
-This is my project of creating and developing an opensource bluetooth tracker solution. It is developed on a seed studio XIAO-nRF52840 board. I don't know if it works on any other, I didn't have time and money to test it. I would appreciate if you tested it, you send me a feedback of your results.
+This is my project of creating and developing an opensource bluetooth tracker solution. It is developed on a seed studio XIAO-nRF52840 board. I don't know if it works on any other, I didn't have time and money to test it. I would appreciate if you tested it, you send me a feedback of your results.\
 You will also need Python 3.12. Yet again, I don't know if it works on other versions, feel free to test it to it's limits.
 Same goes for browsers. Chromium browsers will 100% work, but I don't know what features need to be enabled for it.
 
