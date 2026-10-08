@@ -25,7 +25,7 @@ Same goes for browsers. Chromium browsers will 100% work, but I don't know what 
 10. Create a DDNS (I used [No-IP](noip.com), but you can use whatever you want)
 11. Move the index html into the NGINX's host folder eg:\\TRUENAS\apps\nginxpmplus\opentag (This is a generic location, you may have to change it according to your setup)
 12. Create a Proxy Host, where: Domain Name {Your DDNS}; Scheme: path:; Forward Hostname / IP / Path: /data/opentag/ (You may have to change it according to your setup); Leave everything else as is
-13. Switch to TLS, Request a new Certificate; Force HTTPS; Leave everything else as is
+13. Switch to TLS, Request a new Certificate; Force HTTPS; Leave everything else as is\
     (You may have to open a porn on your router if NGINX throws an error (This may differ between manufacturers):
     1. Service name: OpenTag HTTP; Protocol TCP; Internal host: {Your Truenas IP Address}; External port: 80, Internal port: 30361 (This is the default port, that NGINX uses, your may differ according to your setup)
     2. Service name: OpenTag HTTP; Protocol TCP; Internal host: {Your Truenas IP Address}; External port: 443, Internal port: 30362 (This is the default port, that NGINX uses, your may differ according to your setup)
