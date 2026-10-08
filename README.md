@@ -13,7 +13,7 @@ Same goes for browsers. Chromium browsers will 100% work, but I don't know what 
 7. Go to: chrome://flags/#enable-experimental-web-platform-features and Enable it.\
 (Task 1 to 7 needs to be done only at the first time setup)
 
-# LoaclHost option
+# LocalHost option
 9. Open a CMD inside the unzipped folder and run: python -m http.server 8000
 10. Go back to Chrome and open: http://localhost:8000/
 11. If you did everything correctly it should show you a map and some set up buttons
