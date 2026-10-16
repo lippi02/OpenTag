@@ -9,6 +9,8 @@ const WS_PATH = process.env.WS_PATH || '/ws';
 const TRACKER_TTL_MS = Number(process.env.TRACKER_TTL_MS || 15000);
 const MAX_MESSAGE_BYTES = 32 * 1024;
 
+// Phase 1 is intentionally simple: state lives in memory only.
+// Later, authenticated users/trackers can be persisted in a database.
 const trackerStates = new Map();
 const clients = new Set();
 
@@ -115,6 +117,7 @@ function sendFrame(socket, opcode, payloadBuffer = Buffer.alloc(0)) {
     header = Buffer.alloc(10);
     header[0] = 0x80 | opcode;
     header[1] = 127;
+    // This prototype never intentionally sends payloads this large.
     header.writeBigUInt64BE(BigInt(payload.length), 2);
   }
 
@@ -250,8 +253,9 @@ function processWebSocketBuffer(client) {
       payload[i] ^= mask[i % 4];
     }
 
+    // Browsers send the JSON messages here as single, final text frames.
     if (!fin && opcode < 8) {
-      sendFrame(client.socket, 0x8, Buffer.from([0x03, 0xeb]));
+      sendFrame(client.socket, 0x8, Buffer.from([0x03, 0xeb])); // 1003
       client.socket.end();
       return;
     }
@@ -271,10 +275,11 @@ function processWebSocketBuffer(client) {
       client.socket.end();
       return;
     } else if (opcode === 0x9) {
-      sendFrame(client.socket, 0xA, payload);
-    } else if (opcode === 0xA)
+      sendFrame(client.socket, 0xA, payload); // pong
+    } else if (opcode === 0xA) {
+      // pong: nothing to do
     } else {
-      sendFrame(client.socket, 0x8, Buffer.from([0x03, 0xeb]));
+      sendFrame(client.socket, 0x8, Buffer.from([0x03, 0xeb])); // 1003
       client.socket.end();
       return;
     }
@@ -286,6 +291,7 @@ function destroyClient(client) {
   client.destroyed = true;
   clients.delete(client);
 
+  // Only remove states that are still reported by this client.
   for (const [trackerId, state] of trackerStates) {
     if (state.reporterId === client.clientId) {
       trackerStates.delete(trackerId);
@@ -303,6 +309,7 @@ function destroyClient(client) {
 
 function handleUpgrade(request, socket) {
   const url = new URL(request.url, 'http://localhost');
+  // Accept both forms because NPMplus custom locations are normally slash-terminated.
   const expectedWsPath = (WS_PATH || '/ws').replace(/\/+$/, '') || '/ws';
   if (request.method !== 'GET' || (url.pathname !== expectedWsPath && url.pathname !== `${expectedWsPath}/`)) {
     socket.destroy();
