@@ -308,8 +308,6 @@
     const CAL_TX_POWER = 4;
     const LOST_TX_POWER = 8;
 
-    // Internal distance-calibration values.
-    // Kept out of the UI to keep the prototype simple.
     const CAL_RSSI_1M = -59;
     const PATH_LOSS_EXPONENT = 2.0;
     const RSSI_WINDOW_MS = 8000;
@@ -322,16 +320,12 @@
     let lastTxPower = NaN;
     let trackerMode = null;
 
-    // Shared phase-1 backend state. General user location is NOT sent.
-    // A location is uploaded only while this browser is actively detecting a tracker.
     let sharedSocket = null;
     let sharedReconnectTimer = null;
     let sharedReconnectDelay = 1000;
-    // Assigned by the server for every connection, so each browser tab has its own id.
     let sharedClientId = null;
     let sharedEverOpened = false;
 
-    // Optional access code: open https://<domain>/?token=CODE once per device; it is remembered.
     (function rememberAccessToken() {
       const params = new URLSearchParams(location.search);
       if (!params.has("token")) return;
@@ -382,7 +376,6 @@
       el.textContent = `${prefix} Shared backend: ${text}`;
     }
 
-    // Last known state of every tracker (live or not). The yellow dot is drawn from this on every device.
     const sharedStates = new Map();
     let serverOffsetMs = 0; // server clock minus local clock, so "age" is right even if the phone clock is off
     const serverNow = () => Date.now() + serverOffsetMs;
@@ -427,7 +420,6 @@
       return rows.join("<br>");
     }
 
-    // Solid dot = tracker currently in range; faded dot = last known position.
     function styleSharedMarker(trackerId) {
       const state = sharedStates.get(trackerId);
       const marker = sharedMarkers.get(trackerId);
@@ -439,7 +431,6 @@
     }
 
     function renderSharedTrackerState(state) {
-      // Without a GPS fix there is nothing new to draw: keep the previous (last known) position.
       if (!state || !state.trackerId || !state.location) return;
 
       const id = state.trackerId;
@@ -477,7 +468,6 @@
       styleSharedMarker(id);
     }
 
-    // The tracker is no longer reported live; the dot stays at the last known position.
     function markSharedTrackerOffline(trackerId, reason = "removed") {
       const state = sharedStates.get(trackerId);
       if (state) {
@@ -626,7 +616,6 @@
     function startSharedReportTimer() {
       setInterval(() => {
         sendTrackerReport(false);
-        // Fade dots whose tracker is no longer reported live; the last known position stays on the map.
         for (const trackerId of sharedStates.keys()) styleSharedMarker(trackerId);
         if (!(tracking && receiving)) clearDistanceCircle();
       }, SHARED_REPORT_INTERVAL_MS);
@@ -725,9 +714,6 @@
       trackerDistanceCircle = null;
     }
 
-    // While this device hears the tracker, the tracker is near us: its position is ours.
-    // That position goes into the shared state (yellow dot) at once; the server then spreads it to everybody.
-    // When the tracker is out of range the dot simply stays where it was last seen.
     function updateTrackerMarker(d = estimateDistance(smoothNorm)) {
       if (!tracking || !receiving || !myPosition) {
         clearDistanceCircle();
@@ -924,7 +910,6 @@
           await readCurrentMode();
         } catch (modeError) {
           log(`Current mode read failed: ${modeError.message}`);
-          // We do not write a fallback value to the tracker.
           setTrackerMode("normal");
           setStatus(
             "Tracker selected",
@@ -1010,7 +995,6 @@
         } catch (_) {}
       }
 
-      // Give the tracker time to resume advertising.
       await sleep(350);
     }
 
@@ -1110,7 +1094,7 @@
       setStatus("No tracker connected", "Waiting for BLE devices.", "");
       for (const id of ["deviceName", "rssi", "distance", "txPower"]) $(id).textContent = "–";
 
-      clearDistanceCircle(); // the yellow dot stays on the map as the last known position
+      clearDistanceCircle();
     }
 
     document.addEventListener("visibilitychange", () => {
@@ -1134,7 +1118,6 @@
       try { sharedSocket?.close(); } catch (_) {}
     });
 
-    // Show this device's current position for every visitor.
     startLocation();
   </script>
 </body>

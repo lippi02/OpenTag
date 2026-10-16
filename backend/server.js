@@ -10,17 +10,12 @@ const WS_PATH = process.env.WS_PATH || '/ws';
 const TRACKER_TTL_MS = Number(process.env.TRACKER_TTL_MS || 15000);
 const MAX_MESSAGE_BYTES = 32 * 1024;
 const MAX_TRACKERS = 200;
-// Shared access code. Empty = no protection (development only).
 const ACCESS_TOKEN = process.env.ACCESS_TOKEN || '';
-// Keepalive: keeps the WebSocket alive through the reverse proxy (nginx closes idle sockets after ~60 s).
 const PING_INTERVAL_MS = Number(process.env.PING_INTERVAL_MS || 25000);
-// Optional file (on a writable volume) so the last known positions survive a restart.
 const DATA_FILE = process.env.DATA_FILE || '';
 
-// Phase 1 is intentionally simple: state lives in memory only.
-// Later, authenticated users/trackers can be persisted in a database.
-const trackerStates = new Map(); // live trackers (reported within TRACKER_TTL_MS)
-const lastKnown = new Map();     // last known position of every tracker, never expires
+const trackerStates = new Map();
+const lastKnown = new Map();
 const clients = new Set();
 
 function now() {
@@ -170,7 +165,6 @@ function sendFrame(socket, opcode, payloadBuffer = Buffer.alloc(0)) {
     header = Buffer.alloc(10);
     header[0] = 0x80 | opcode;
     header[1] = 127;
-    // This prototype never intentionally sends payloads this large.
     header.writeBigUInt64BE(BigInt(payload.length), 2);
   }
 
@@ -209,8 +203,6 @@ function handleMessage(client, message) {
   if (!message || typeof message !== 'object') return;
 
   if (message.type === 'hello') {
-    // The clientId is assigned by the server for every connection (unique per browser tab);
-    // a client-supplied id is ignored, so nobody can impersonate another reporter.
     sendJson(client, {
       type: 'helloAck',
       clientId: client.clientId,
@@ -275,7 +267,7 @@ function processWebSocketBuffer(client) {
     let offset = 2;
 
     if (!masked) {
-      sendFrame(client.socket, 0x8, Buffer.from([0x03, 0xea])); // 1002
+      sendFrame(client.socket, 0x8, Buffer.from([0x03, 0xea]));
       client.socket.end();
       return;
     }
@@ -288,7 +280,7 @@ function processWebSocketBuffer(client) {
       if (client.buffer.length < offset + 8) return;
       const length64 = client.buffer.readBigUInt64BE(offset);
       if (length64 > BigInt(MAX_MESSAGE_BYTES)) {
-        sendFrame(client.socket, 0x8, Buffer.from([0x03, 0xf1])); // 1009
+        sendFrame(client.socket, 0x8, Buffer.from([0x03, 0xf1]));
         client.socket.end();
         return;
       }
@@ -297,7 +289,7 @@ function processWebSocketBuffer(client) {
     }
 
     if (payloadLength > MAX_MESSAGE_BYTES) {
-      sendFrame(client.socket, 0x8, Buffer.from([0x03, 0xf1])); // 1009
+      sendFrame(client.socket, 0x8, Buffer.from([0x03, 0xf1]));
       client.socket.end();
       return;
     }
@@ -309,15 +301,14 @@ function processWebSocketBuffer(client) {
     offset += 4;
     const payload = Buffer.from(client.buffer.subarray(offset, offset + payloadLength));
     client.buffer = client.buffer.subarray(frameLength);
-    client.alive = true; // any complete frame (incl. pong) proves the client is still there
+    client.alive = true;
 
     for (let i = 0; i < payload.length; i++) {
       payload[i] ^= mask[i % 4];
     }
 
-    // Browsers send the JSON messages here as single, final text frames.
     if (!fin && opcode < 8) {
-      sendFrame(client.socket, 0x8, Buffer.from([0x03, 0xeb])); // 1003
+      sendFrame(client.socket, 0x8, Buffer.from([0x03, 0xeb]));
       client.socket.end();
       return;
     }
@@ -337,11 +328,10 @@ function processWebSocketBuffer(client) {
       client.socket.end();
       return;
     } else if (opcode === 0x9) {
-      sendFrame(client.socket, 0xA, payload); // pong
+      sendFrame(client.socket, 0xA, payload);
     } else if (opcode === 0xA) {
-      // pong: nothing to do
     } else {
-      sendFrame(client.socket, 0x8, Buffer.from([0x03, 0xeb])); // 1003
+      sendFrame(client.socket, 0x8, Buffer.from([0x03, 0xeb]));
       client.socket.end();
       return;
     }
@@ -353,7 +343,6 @@ function destroyClient(client) {
   client.destroyed = true;
   clients.delete(client);
 
-  // Only remove states that are still reported by this client.
   for (const [trackerId, state] of trackerStates) {
     if (state.reporterId === client.clientId) {
       trackerStates.delete(trackerId);
@@ -371,7 +360,6 @@ function destroyClient(client) {
 
 function handleUpgrade(request, socket) {
   const url = new URL(request.url, 'http://localhost');
-  // Accept both forms because NPMplus custom locations are normally slash-terminated.
   const expectedWsPath = (WS_PATH || '/ws').replace(/\/+$/, '') || '/ws';
   if (request.method !== 'GET' || (url.pathname !== expectedWsPath && url.pathname !== `${expectedWsPath}/`)) {
     socket.destroy();
@@ -497,7 +485,7 @@ setInterval(() => {
 setInterval(() => {
   for (const client of [...clients]) {
     if (!client.alive) {
-      destroyClient(client); // no pong since the previous ping: dead connection
+      destroyClient(client);
       continue;
     }
     client.alive = false;
