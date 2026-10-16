@@ -2,16 +2,25 @@
 
 const http = require('node:http');
 const crypto = require('node:crypto');
+const fs = require('node:fs');
 
 const HOST = process.env.HOST || '0.0.0.0';
 const PORT = Number(process.env.PORT || 3000);
 const WS_PATH = process.env.WS_PATH || '/ws';
 const TRACKER_TTL_MS = Number(process.env.TRACKER_TTL_MS || 15000);
 const MAX_MESSAGE_BYTES = 32 * 1024;
+const MAX_TRACKERS = 200;
+// Shared access code. Empty = no protection (development only).
+const ACCESS_TOKEN = process.env.ACCESS_TOKEN || '';
+// Keepalive: keeps the WebSocket alive through the reverse proxy (nginx closes idle sockets after ~60 s).
+const PING_INTERVAL_MS = Number(process.env.PING_INTERVAL_MS || 25000);
+// Optional file (on a writable volume) so the last known positions survive a restart.
+const DATA_FILE = process.env.DATA_FILE || '';
 
 // Phase 1 is intentionally simple: state lives in memory only.
 // Later, authenticated users/trackers can be persisted in a database.
-const trackerStates = new Map();
+const trackerStates = new Map(); // live trackers (reported within TRACKER_TTL_MS)
+const lastKnown = new Map();     // last known position of every tracker, never expires
 const clients = new Set();
 
 function now() {
@@ -36,6 +45,49 @@ function validLongitude(value) {
 function clampText(value, maxLength) {
   if (typeof value !== 'string') return '';
   return value.trim().slice(0, maxLength);
+}
+
+function tokenOk(provided) {
+  if (!ACCESS_TOKEN) return true;
+  const a = crypto.createHash('sha256').update(String(provided || '')).digest();
+  const b = crypto.createHash('sha256').update(ACCESS_TOKEN).digest();
+  return crypto.timingSafeEqual(a, b);
+}
+
+let saveTimer = null;
+
+function scheduleSave() {
+  if (!DATA_FILE || saveTimer) return;
+  saveTimer = setTimeout(() => {
+    saveTimer = null;
+    const tmp = `${DATA_FILE}.tmp`;
+    try {
+      fs.writeFileSync(tmp, JSON.stringify([...lastKnown.values()]));
+      fs.renameSync(tmp, DATA_FILE);
+    } catch (error) {
+      console.warn(`Could not save ${DATA_FILE}: ${error.message}`);
+    }
+  }, 5000);
+}
+
+function loadLastKnown() {
+  if (!DATA_FILE) return;
+  try {
+    const data = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
+    for (const item of Array.isArray(data) ? data : []) {
+      const location = sanitizeLocation(item && item.location);
+      const trackerId = clampText(item && item.trackerId, 100);
+      if (!trackerId || !location) continue;
+      lastKnown.set(trackerId, { ...item, trackerId, location, live: false });
+    }
+    console.log(`Loaded ${lastKnown.size} last known position(s) from ${DATA_FILE}`);
+  } catch (error) {
+    if (error.code !== 'ENOENT') console.warn(`Could not load ${DATA_FILE}: ${error.message}`);
+  }
+}
+
+function lastKnownSnapshot() {
+  return [...lastKnown.values()];
 }
 
 function sanitizeLocation(location) {
@@ -77,6 +129,7 @@ function sanitizeReport(message, clientId) {
       ? distanceM
       : null,
     mode,
+    live: true,
     reporterId: clientId,
     updatedAt: now(),
     lastBlePacketAt: Number.isFinite(Number(message.lastBlePacketAt))
@@ -156,9 +209,8 @@ function handleMessage(client, message) {
   if (!message || typeof message !== 'object') return;
 
   if (message.type === 'hello') {
-    const requestedId = clampText(message.clientId, 120);
-    if (requestedId) client.clientId = requestedId;
-
+    // The clientId is assigned by the server for every connection (unique per browser tab);
+    // a client-supplied id is ignored, so nobody can impersonate another reporter.
     sendJson(client, {
       type: 'helloAck',
       clientId: client.clientId,
@@ -168,6 +220,7 @@ function handleMessage(client, message) {
     sendJson(client, {
       type: 'snapshot',
       trackers: stateSnapshot(),
+      lastKnown: lastKnownSnapshot(),
       serverTime: now(),
     });
     return;
@@ -176,7 +229,15 @@ function handleMessage(client, message) {
   if (message.type === 'trackerReport') {
     try {
       const state = sanitizeReport(message, client.clientId);
+      const known = trackerStates.has(state.trackerId) || lastKnown.has(state.trackerId);
+      if (!known && Math.max(trackerStates.size, lastKnown.size) >= MAX_TRACKERS) {
+        throw new Error('Too many trackers');
+      }
       trackerStates.set(state.trackerId, state);
+      if (state.location) {
+        lastKnown.set(state.trackerId, { ...state, live: false });
+        scheduleSave();
+      }
 
       broadcast({
         type: 'trackerState',
@@ -248,6 +309,7 @@ function processWebSocketBuffer(client) {
     offset += 4;
     const payload = Buffer.from(client.buffer.subarray(offset, offset + payloadLength));
     client.buffer = client.buffer.subarray(frameLength);
+    client.alive = true; // any complete frame (incl. pong) proves the client is still there
 
     for (let i = 0; i < payload.length; i++) {
       payload[i] ^= mask[i % 4];
@@ -316,6 +378,12 @@ function handleUpgrade(request, socket) {
     return;
   }
 
+  if (!tokenOk(url.searchParams.get('token'))) {
+    socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n');
+    socket.destroy();
+    return;
+  }
+
   const upgrade = String(request.headers.upgrade || '').toLowerCase();
   const connection = String(request.headers.connection || '').toLowerCase();
   const key = request.headers['sec-websocket-key'];
@@ -345,6 +413,7 @@ function handleUpgrade(request, socket) {
     clientId: crypto.randomUUID(),
     buffer: Buffer.alloc(0),
     destroyed: false,
+    alive: true,
   };
 
   clients.add(client);
@@ -382,8 +451,15 @@ const server = http.createServer((request, response) => {
   }
 
   if (request.method === 'GET' && url.pathname === '/api/state') {
+    const provided = url.searchParams.get('token') || request.headers['x-access-token'];
+    if (!tokenOk(provided)) {
+      response.writeHead(401, { 'Content-Type': 'application/json; charset=utf-8' });
+      response.end(JSON.stringify({ error: 'Unauthorized' }));
+      return;
+    }
     const body = JSON.stringify({
       trackers: stateSnapshot(),
+      lastKnown: lastKnownSnapshot(),
       serverTime: now(),
     });
 
@@ -418,8 +494,27 @@ setInterval(() => {
   }
 }, 5000).unref();
 
+setInterval(() => {
+  for (const client of [...clients]) {
+    if (!client.alive) {
+      destroyClient(client); // no pong since the previous ping: dead connection
+      continue;
+    }
+    client.alive = false;
+    try {
+      sendFrame(client.socket, 0x9);
+    } catch (_) {
+      destroyClient(client);
+    }
+  }
+}, PING_INTERVAL_MS).unref();
+
+loadLastKnown();
+
 server.listen(PORT, HOST, () => {
   console.log(`OpenTag backend listening on http://${HOST}:${PORT}`);
   console.log(`WebSocket endpoint: ${WS_PATH}`);
   console.log(`Tracker state TTL: ${TRACKER_TTL_MS} ms`);
+  console.log(`Access code: ${ACCESS_TOKEN ? 'required' : 'NOT SET (open access)'}`);
+  console.log(`Last known positions file: ${DATA_FILE || 'none (memory only)'}`);
 });

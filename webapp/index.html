@@ -304,7 +304,6 @@
     let myMarker = null;
     let accuracyCircle = null;
     let myPosition = null;
-    let trackerEstimateMarker = null;
     let trackerDistanceCircle = null;
     const CAL_TX_POWER = 4;
     const LOST_TX_POWER = 8;
@@ -328,16 +327,26 @@
     let sharedSocket = null;
     let sharedReconnectTimer = null;
     let sharedReconnectDelay = 1000;
-    let sharedClientId = localStorage.getItem("opentagClientId");
+    // Assigned by the server for every connection, so each browser tab has its own id.
+    let sharedClientId = null;
+    let sharedEverOpened = false;
+
+    // Optional access code: open https://<domain>/?token=CODE once per device; it is remembered.
+    (function rememberAccessToken() {
+      const params = new URLSearchParams(location.search);
+      if (!params.has("token")) return;
+      try { localStorage.setItem("opentagToken", params.get("token")); } catch (_) {}
+      params.delete("token");
+      const query = params.toString();
+      history.replaceState(null, "", location.pathname + (query ? `?${query}` : "") + location.hash);
+    })();
+    const accessToken = (() => {
+      try { return localStorage.getItem("opentagToken") || ""; } catch (_) { return ""; }
+    })();
     const sharedMarkers = new Map();
     const sharedAccuracyCircles = new Map();
     const SHARED_REPORT_INTERVAL_MS = 1000;
     const SHARED_STALE_MS = 15000;
-
-    if (!sharedClientId) {
-      sharedClientId = crypto.randomUUID();
-      localStorage.setItem("opentagClientId", sharedClientId);
-    }
 
     let myAccuracy = null;
     let lastSharedReportAt = 0;
@@ -362,7 +371,8 @@
 
     function backendWebSocketUrl() {
       const protocol = location.protocol === "https:" ? "wss:" : "ws:";
-      return `${protocol}//${location.host}/ws/`;
+      const query = accessToken ? `?token=${encodeURIComponent(accessToken)}` : "";
+      return `${protocol}//${location.host}/ws/${query}`;
     }
 
     function setBackendPill(text, state = "neutral") {
@@ -372,97 +382,124 @@
       el.textContent = `${prefix} Shared backend: ${text}`;
     }
 
-    function clearSharedMarker(trackerId) {
-      const marker = sharedMarkers.get(trackerId);
-      if (marker) map.removeLayer(marker);
-      sharedMarkers.delete(trackerId);
+    // Last known state of every tracker (live or not). The yellow dot is drawn from this on every device.
+    const sharedStates = new Map();
+    let serverOffsetMs = 0; // server clock minus local clock, so "age" is right even if the phone clock is off
+    const serverNow = () => Date.now() + serverOffsetMs;
 
-      const circle = sharedAccuracyCircles.get(trackerId);
-      if (circle) map.removeLayer(circle);
-      sharedAccuracyCircles.delete(trackerId);
+    function escapeHtml(value) {
+      return String(value ?? "").replace(/[&<>"']/g, (c) => (
+        { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]
+      ));
     }
 
-    function removeSharedTrackerState(trackerId, reason = "removed") {
-      clearSharedMarker(trackerId);
-      log(`Shared tracker removed: ${trackerId} (${reason}).`);
+    function formatAge(ms) {
+      const sec = Math.max(0, Math.round(ms / 1000));
+      if (sec < 60) return `${sec} s`;
+      const min = Math.round(sec / 60);
+      if (min < 60) return `${min} min`;
+      const h = Math.floor(min / 60);
+      if (h < 24) return `${h} h ${min % 60} min`;
+      return `${Math.floor(h / 24)} d ${h % 24} h`;
+    }
+
+    function sharedStateIsLive(state) {
+      return state.live !== false && serverNow() - (state.updatedAt || 0) <= SHARED_STALE_MS;
+    }
+
+    function sharedPopupHtml(trackerId) {
+      const state = sharedStates.get(trackerId);
+      if (!state) return "";
+      const live = sharedStateIsLive(state);
+      const updated = new Date(state.updatedAt || serverNow());
+      const accuracy = Number(state.location?.accuracy);
+      const rows = [
+        `<strong>${escapeHtml(state.trackerName || state.trackerId)}</strong>`,
+        live ? "Tracker in range – live position" : "Last known position (tracker not in range)",
+        `Last report: ${updated.toLocaleString("hu-HU")} (${formatAge(serverNow() - updated.getTime())} ago)`
+      ];
+      if (live) {
+        rows.push(`RSSI: ${Number.isFinite(state.rssi) ? `${Math.round(state.rssi)} dBm` : "–"}`);
+        rows.push(`Estimated distance from reporter: ${Number.isFinite(state.distanceM) ? formatDistance(state.distanceM) : "–"}`);
+      }
+      rows.push(`Reporter GPS accuracy: ${Number.isFinite(accuracy) ? `${Math.round(accuracy)} m` : "–"}`);
+      rows.push(`Mode: ${escapeHtml((state.mode || "normal").toUpperCase())}`);
+      return rows.join("<br>");
+    }
+
+    // Solid dot = tracker currently in range; faded dot = last known position.
+    function styleSharedMarker(trackerId) {
+      const state = sharedStates.get(trackerId);
+      const marker = sharedMarkers.get(trackerId);
+      if (!state || !marker) return;
+      const live = sharedStateIsLive(state);
+      marker.setStyle({ fillOpacity: live ? 1 : 0.5, opacity: live ? 1 : 0.7 });
+      const circle = sharedAccuracyCircles.get(trackerId);
+      if (circle) circle.setStyle({ fillOpacity: live ? 0.10 : 0.04, opacity: live ? 1 : 0.5 });
     }
 
     function renderSharedTrackerState(state) {
-      if (!state || !state.trackerId) return;
+      // Without a GPS fix there is nothing new to draw: keep the previous (last known) position.
+      if (!state || !state.trackerId || !state.location) return;
 
-      // Never draw our own report as a second marker; the local yellow marker already shows it.
-      if (state.reporterId === sharedClientId) return;
-      if (!state.location) {
-        clearSharedMarker(state.trackerId);
-        return;
-      }
-
+      const id = state.trackerId;
+      sharedStates.set(id, state);
       const latLng = [state.location.lat, state.location.lng];
-      const timestamp = new Date(state.updatedAt || Date.now());
-      const ageSeconds = Math.max(0, Math.round((Date.now() - timestamp.getTime()) / 1000));
-      const distanceText = Number.isFinite(state.distanceM) ? formatDistance(state.distanceM) : "–";
-      const rssiText = Number.isFinite(state.rssi) ? `${Math.round(state.rssi)} dBm` : "–";
-      const accuracyText = Number.isFinite(state.location.accuracy) ? `${Math.round(state.location.accuracy)} m` : "–";
 
-      const popup = `
-        <strong>${state.trackerName || state.trackerId}</strong><br>
-        Shared tracker location<br>
-        Last report: ${timestamp.toLocaleTimeString("hu-HU")} (${ageSeconds}s ago)<br>
-        RSSI: ${rssiText}<br>
-        Estimated distance: ${distanceText}<br>
-        Reporter GPS accuracy: ${accuracyText}<br>
-        Mode: ${(state.mode || "normal").toUpperCase()}
-      `;
-
-      let marker = sharedMarkers.get(state.trackerId);
+      let marker = sharedMarkers.get(id);
       if (!marker) {
         marker = L.circleMarker(latLng, {
-          radius: 7,
-          color: "#7c2d12",
-          weight: 2,
-          fillColor: "#fb923c",
-          fillOpacity: 0.95,
-          pane: "markerPane"
+          radius: 7, color: "#111827", weight: 2,
+          fillColor: "#facc15", fillOpacity: 1, pane: "markerPane"
         }).addTo(map);
-        sharedMarkers.set(state.trackerId, marker);
+        marker.bindPopup(() => sharedPopupHtml(id));
+        sharedMarkers.set(id, marker);
       } else {
         marker.setLatLng(latLng);
       }
-      marker.bindPopup(popup);
-      marker.__opentagUpdatedAt = timestamp.getTime();
 
       const accuracy = Number(state.location.accuracy);
+      let circle = sharedAccuracyCircles.get(id);
       if (Number.isFinite(accuracy) && accuracy > 0) {
-        let circle = sharedAccuracyCircles.get(state.trackerId);
         if (!circle) {
           circle = L.circle(latLng, {
-            radius: accuracy,
-            color: "#fb923c",
-            fillColor: "#fb923c",
-            fillOpacity: 0.04,
-            weight: 1
+            radius: accuracy, color: "#facc15", fillColor: "#facc15", fillOpacity: 0.10, weight: 1
           }).addTo(map);
-          sharedAccuracyCircles.set(state.trackerId, circle);
+          sharedAccuracyCircles.set(id, circle);
         } else {
           circle.setLatLng(latLng);
           circle.setRadius(accuracy);
         }
+      } else if (circle) {
+        map.removeLayer(circle);
+        sharedAccuracyCircles.delete(id);
       }
+      styleSharedMarker(id);
+    }
+
+    // The tracker is no longer reported live; the dot stays at the last known position.
+    function markSharedTrackerOffline(trackerId, reason = "removed") {
+      const state = sharedStates.get(trackerId);
+      if (state) {
+        state.live = false;
+        styleSharedMarker(trackerId);
+      }
+      log(`Tracker not live any more: ${trackerId} (${reason}). Showing its last known position.`);
     }
 
     function handleSharedBackendMessage(message) {
       if (!message || typeof message !== "object") return;
 
       if (message.type === "helloAck") {
-        if (typeof message.clientId === "string" && message.clientId) {
-          sharedClientId = message.clientId;
-          localStorage.setItem("opentagClientId", sharedClientId);
-        }
+        if (typeof message.clientId === "string" && message.clientId) sharedClientId = message.clientId;
+        if (Number.isFinite(message.serverTime)) serverOffsetMs = message.serverTime - Date.now();
         return;
       }
 
       if (message.type === "snapshot") {
-        for (const state of message.trackers || []) renderSharedTrackerState(state);
+        if (Number.isFinite(message.serverTime)) serverOffsetMs = message.serverTime - Date.now();
+        for (const state of message.lastKnown || []) renderSharedTrackerState({ ...state, live: false });
+        for (const state of message.trackers || []) renderSharedTrackerState({ ...state, live: true });
         setBackendPill("connected", "ok");
         return;
       }
@@ -473,7 +510,7 @@
       }
 
       if (message.type === "trackerRemoved") {
-        removeSharedTrackerState(message.trackerId, message.reason || "removed");
+        markSharedTrackerOffline(message.trackerId, message.reason || "removed");
         return;
       }
 
@@ -506,11 +543,11 @@
 
         sharedSocket.addEventListener("open", () => {
           sharedReconnectDelay = 1000;
+          sharedEverOpened = true;
           setBackendPill("connected", "ok");
           log("Shared backend connected.");
           sharedSocket.send(JSON.stringify({
             type: "hello",
-            clientId: sharedClientId,
             appVersion: "phase1"
           }));
         });
@@ -524,7 +561,10 @@
         });
 
         sharedSocket.addEventListener("close", () => {
-          setBackendPill("disconnected; retrying…", "warn");
+          setBackendPill(
+            sharedEverOpened ? "disconnected; retrying…" : "cannot connect (access code? proxy?); retrying…",
+            "warn"
+          );
           scheduleSharedReconnect();
         });
 
@@ -586,12 +626,9 @@
     function startSharedReportTimer() {
       setInterval(() => {
         sendTrackerReport(false);
-        const cutoff = Date.now() - SHARED_STALE_MS;
-        // Local visual cleanup only; the backend is the authority.
-        for (const [trackerId, marker] of sharedMarkers) {
-          const updated = Number(marker.__opentagUpdatedAt || 0);
-          if (updated && updated < cutoff) clearSharedMarker(trackerId);
-        }
+        // Fade dots whose tracker is no longer reported live; the last known position stays on the map.
+        for (const trackerId of sharedStates.keys()) styleSharedMarker(trackerId);
+        if (!(tracking && receiving)) clearDistanceCircle();
       }, SHARED_REPORT_INTERVAL_MS);
     }
 
@@ -683,27 +720,42 @@
       updateTrackerMarker(d);
     }
 
-    function updateTrackerMarker(d = estimateDistance(smoothNorm)) {
-      if (!myPosition) return;
-      const hasD = Number.isFinite(d);
-      const markerText = hasD
-		? `BLE tracker proximity indicator<br>Estimated distance: ${formatDistance(d)}<br>Direction is not determined by BLE RSSI alone.`
-		: `BLE tracker proximity indicator<br>No distance estimate based on RSSI yet.`;
-		
-      if (!trackerEstimateMarker) {
-        trackerEstimateMarker = L.circleMarker(myPosition, {
-          radius: 5, color: "#111827", weight: 2,
-          fillColor: "#facc15", fillOpacity: 1, pane: "markerPane"
-        }).bindPopup(markerText).addTo(map);
-      } else {
-        trackerEstimateMarker.setLatLng(myPosition);
-        trackerEstimateMarker.getPopup().setContent(markerText);
-      }
+    function clearDistanceCircle() {
+      if (trackerDistanceCircle) map.removeLayer(trackerDistanceCircle);
+      trackerDistanceCircle = null;
+    }
 
-      if (!hasD) return;
+    // While this device hears the tracker, the tracker is near us: its position is ours.
+    // That position goes into the shared state (yellow dot) at once; the server then spreads it to everybody.
+    // When the tracker is out of range the dot simply stays where it was last seen.
+    function updateTrackerMarker(d = estimateDistance(smoothNorm)) {
+      if (!tracking || !receiving || !myPosition) {
+        clearDistanceCircle();
+        return;
+      }
+      const hasD = Number.isFinite(d);
+      renderSharedTrackerState({
+        trackerId: TRACKER_NAME,
+        trackerName: device?.name || TRACKER_NAME,
+        location: {
+          lat: myPosition[0],
+          lng: myPosition[1],
+          accuracy: Number.isFinite(myAccuracy) ? myAccuracy : null
+        },
+        rssi: Number.isFinite(smoothRaw) ? smoothRaw : null,
+        distanceM: hasD ? d : null,
+        mode: trackerMode === "lost" ? "lost" : "normal",
+        updatedAt: serverNow(),
+        live: true
+      });
+
+      if (!hasD) {
+        clearDistanceCircle();
+        return;
+      }
       const radius = Math.max(3, Math.min(d, 100));
       const circleText = `BLE tracker estimated distance: ${formatDistance(d)}<br>` +
-        `It's not a real GPS-posizion; only RSSI-based estimation.`;
+        `It's not a real GPS position; only an RSSI-based estimation.`;
 
       if (!trackerDistanceCircle) {
         trackerDistanceCircle = L.circle(myPosition, {
@@ -839,6 +891,7 @@
 
       if (!receiving) {
         receiving = true;
+        updateTrackerMarker();
         setStatus("Tracker found", Number.isFinite(rssi) ? "Advertising packet arrived." : "Advertising packet arrived, without RSSI.", "ok");
       }
     }
@@ -1057,10 +1110,7 @@
       setStatus("No tracker connected", "Waiting for BLE devices.", "");
       for (const id of ["deviceName", "rssi", "distance", "txPower"]) $(id).textContent = "–";
 
-      for (const layer of [trackerEstimateMarker, trackerDistanceCircle]) {
-        if (layer) map.removeLayer(layer);
-      }
-      trackerEstimateMarker = trackerDistanceCircle = null;
+      clearDistanceCircle(); // the yellow dot stays on the map as the last known position
     }
 
     document.addEventListener("visibilitychange", () => {
