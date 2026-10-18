@@ -32,4 +32,4 @@ Same goes for browsers. Chromium browsers will 100% work, but I don't know what 
      1. *Service name: OpenTag HTTP; Protocol TCP; Internal host: {Your Truenas IP Address}; External port: 80, Internal port: 30361 (This is the default port, that NGINX uses, your may differ according to your setup)*
      2. *Service name: OpenTag HTTPS; Protocol TCP; Internal host: {Your Truenas IP Address}; External port: 443, Internal port: 30362 (This is the default port, that NGINX uses, your may differ according to your setup))*
  19. If you did everything right and click on Save, your DDNS Address should be accessible and now you can see your OWN hosted website\
-(You may also have to setup a DDNS service in your router to prevent a non-accessible website, because your ISP changed your public IP. But the process differs between manufacturers)
+*(You may also have to setup a DDNS service in your router to prevent a non-accessible website, because your ISP changed your public IP. But the process differs between manufacturers)*
