@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>OpenTag – BLE Tracker</title>
+  <title>OpenTag – BLE Tracker (Phase 2)</title>
   <link
     rel="stylesheet"
     href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
@@ -229,6 +229,16 @@
       gap: 8px;
     }
 
+    #trackerApp[hidden], #authPanel[hidden] { display: none !important; }
+    .auth-panel { max-width: 520px; margin: 26px auto; }
+    .auth-panel h2 { margin: 0 0 8px; }
+    .auth-panel p { color: var(--muted); line-height: 1.5; }
+    .auth-panel .auth-error { color: #ff8c82; min-height: 1.4em; font-size: 13px; }
+    .auth-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; }
+    .auth-actions button { flex: 1 1 160px; }
+    .account-bar { display:flex; justify-content:space-between; align-items:center; gap:12px; margin: 0 0 12px; padding: 10px 12px; border:1px solid var(--border); border-radius:12px; background:var(--panel); }
+    .account-bar span { color: var(--muted); font-size: 13px; }
+    .account-bar strong { color: var(--text); }
     @media (max-width: 900px) {
       .grid { grid-template-columns: 1fr; }
       #map { min-height: 460px; height: 60vh; }
@@ -241,6 +251,29 @@
       <h1>OpenTag Tracker</h1>
       <p class="subtitle">XIAO nRF52840 BLE prototipe tracker.</p>
     </header>
+
+    <section id="authPanel" class="panel auth-panel">
+      <h2 id="authTitle">Sign in to OpenTag</h2>
+      <p id="authDescription">Sign in to see only the tracker locations belonging to your account. New here? Create an account.</p>
+      <form id="authForm" autocomplete="on">
+        <label for="authUsername">Username</label>
+        <input id="authUsername" name="username" type="text" autocomplete="username" minlength="3" maxlength="32" required />
+        <label for="authPassword">Password</label>
+        <input id="authPassword" name="password" type="password" autocomplete="current-password" minlength="0" maxlength="128" required />
+        <div id="authError" class="auth-error" role="status" aria-live="polite"></div>
+        <div class="auth-actions">
+          <button id="authSubmit" class="primary" type="submit">Sign in</button>
+          <button id="authSwitch" class="secondary" type="button">Create account</button>
+        </div>
+      </form>
+      <p class="hint">Accounts are separate. Location updates and saved tracker positions are private to the signed-in account. Use a unique password and do not share your login.</p>
+    </section>
+
+    <div id="trackerApp" hidden>
+    <div class="account-bar">
+      <span>Signed in as <strong id="currentUsername">–</strong></span>
+      <button id="logoutBtn" class="secondary" type="button">Sign out</button>
+    </div>
 
     <div class="toolbar">
       <button id="connectBtn" class="primary">Search Tracker</button>
@@ -277,8 +310,8 @@
 
         <div class="map-legend">
           <span class="pill">🔵 Own Position</span>
-          <span class="pill">🟡 Tracker online: live report</span>
-          <span class="pill">🟠 Tracker offline: last known location</span>
+          <span class="pill">🟡 Tracker: live report</span>
+          <span class="pill">🟠 Last known: offline tracker</span>
           <span class="pill" id="backendPill">⚪ Shared backend: connecting…</span>
         </div>
 
@@ -288,6 +321,7 @@
       <section class="panel" style="padding: 10px">
         <div id="map"></div>
       </section>
+    </div>
     </div>
   </div>
 
@@ -327,23 +361,25 @@
     let sharedClientId = null;
     let sharedEverOpened = false;
     let sharedStatePollTimer = null;
-    let statePollAuthWarningShown = false;
     let initialSharedSyncComplete = false;
     let initialMapFitDone = false;
     let programmaticMapMove = false;
     let userMovedMap = false;
 
-    (function rememberAccessToken() {
+    // The old shared access token is no longer used. Remove it from any legacy URL
+    // so it is not left visible in the address bar or copied into a link.
+    (function cleanLegacyTokenFromUrl() {
       const params = new URLSearchParams(location.search);
       if (!params.has("token")) return;
-      try { localStorage.setItem("opentagToken", params.get("token")); } catch (_) {}
       params.delete("token");
       const query = params.toString();
       history.replaceState(null, "", location.pathname + (query ? `?${query}` : "") + location.hash);
     })();
-    const accessToken = (() => {
-      try { return localStorage.getItem("opentagToken") || ""; } catch (_) { return ""; }
-    })();
+    let authenticated = false;
+    let authenticatedUser = null;
+    let authMode = "login";
+    let appStarted = false;
+    let sharedReportTimerId = null;
     const sharedMarkers = new Map();
     const sharedAccuracyCircles = new Map();
     const SHARED_REPORT_INTERVAL_MS = 1000;
@@ -375,8 +411,8 @@
 
     function backendWebSocketUrl() {
       const protocol = location.protocol === "https:" ? "wss:" : "ws:";
-      const query = accessToken ? `?token=${encodeURIComponent(accessToken)}` : "";
-      return `${protocol}//${location.host}/ws/${query}`;
+      // Same-origin HttpOnly session cookie is sent automatically during the WS handshake.
+      return `${protocol}//${location.host}/ws/`;
     }
 
     function setBackendPill(text, state = "neutral") {
@@ -537,18 +573,17 @@
     }
 
     async function refreshSharedStateFromApi() {
+      if (!authenticated) return;
       try {
-        const query = accessToken ? `?token=${encodeURIComponent(accessToken)}` : "";
-        const response = await fetch(`/api/state${query}`, {
+        const response = await fetch("/api/state", {
           method: "GET",
           cache: "no-store",
           credentials: "same-origin",
           headers: { "Accept": "application/json" }
         });
         if (!response.ok) {
-          if (response.status === 401 && !statePollAuthWarningShown) {
-            statePollAuthWarningShown = true;
-            log("Shared state HTTP sync was rejected (access code mismatch or missing). This browser needs the same access code as the backend.");
+          if (response.status === 401) {
+            returnToSignIn("Your session expired. Please sign in again.");
           }
           return;
         }
@@ -620,7 +655,7 @@
     }
 
     function scheduleSharedReconnect() {
-      if (sharedReconnectTimer) return;
+      if (!authenticated || sharedReconnectTimer) return;
       sharedReconnectTimer = setTimeout(() => {
         sharedReconnectTimer = null;
         connectSharedBackend();
@@ -629,6 +664,7 @@
     }
 
     function connectSharedBackend() {
+      if (!authenticated) return;
       if (sharedSocket && (sharedSocket.readyState === WebSocket.OPEN || sharedSocket.readyState === WebSocket.CONNECTING)) {
         return;
       }
@@ -662,10 +698,10 @@
 
         sharedSocket.addEventListener("close", () => {
           setBackendPill(
-            sharedEverOpened ? "disconnected; retrying…" : "cannot connect (access code? proxy?); retrying…",
+            sharedEverOpened ? "disconnected; retrying…" : "cannot connect (session? proxy?); retrying…",
             "warn"
           );
-          scheduleSharedReconnect();
+          if (authenticated) scheduleSharedReconnect();
         });
 
         sharedSocket.addEventListener("error", () => {
@@ -1219,17 +1255,127 @@
       setRemoteMode(mode);
     });
 
-    log(`Required name of tracker: ${TRACKER_NAME}`);
-    connectSharedBackend();
-    startSharedStatePolling();
-    startSharedReportTimer();
+    function setAuthMode(mode) {
+      authMode = mode === "register" ? "register" : "login";
+      const registering = authMode === "register";
+      $("authTitle").textContent = registering ? "Create an OpenTag account" : "Sign in to OpenTag";
+      $("authDescription").textContent = registering
+        ? "Create an account to keep your tracker locations separate from other users."
+        : "Sign in to see only the tracker locations belonging to your account.";
+      $("authSubmit").textContent = registering ? "Create account" : "Sign in";
+      $("authSwitch").textContent = registering ? "I already have an account" : "Create account";
+      $("authPassword").setAttribute("autocomplete", registering ? "new-password" : "current-password");
+    }
+
+    function showSignIn(message = "") {
+      authenticated = false;
+      authenticatedUser = null;
+      $("trackerApp").hidden = true;
+      $("authPanel").hidden = false;
+      $("authError").textContent = message;
+      if (locationWatchId !== null && navigator.geolocation) {
+        try { navigator.geolocation.clearWatch(locationWatchId); } catch (_) {}
+        locationWatchId = null;
+      }
+      if (sharedStatePollTimer) { clearInterval(sharedStatePollTimer); sharedStatePollTimer = null; }
+      if (sharedReportTimerId) { clearInterval(sharedReportTimerId); sharedReportTimerId = null; }
+      if (sharedReconnectTimer) { clearTimeout(sharedReconnectTimer); sharedReconnectTimer = null; }
+      try { sharedSocket?.close(); } catch (_) {}
+      sharedSocket = null;
+      sharedStates.clear();
+      for (const marker of sharedMarkers.values()) map.removeLayer(marker);
+      for (const circle of sharedAccuracyCircles.values()) map.removeLayer(circle);
+      sharedMarkers.clear();
+      sharedAccuracyCircles.clear();
+      initialSharedSyncComplete = false;
+      initialMapFitDone = false;
+      setBackendPill("sign in required", "neutral");
+    }
+
+    function activateSignedInUser(user) {
+      authenticated = true;
+      authenticatedUser = user;
+      $("currentUsername").textContent = user.username;
+      $("authPanel").hidden = true;
+      $("trackerApp").hidden = false;
+      $("authError").textContent = "";
+      // Leaflet was initialized while the app panel was hidden; recalculate its size after showing it.
+      setTimeout(() => { try { map.invalidateSize({ pan: false }); } catch (_) {} }, 100);
+      if (appStarted) return;
+      appStarted = true;
+      log(`Signed in as ${user.username}.`);
+      log(`Required name of tracker: ${TRACKER_NAME}`);
+      connectSharedBackend();
+      startSharedStatePolling();
+      if (!sharedReportTimerId) sharedReportTimerId = setInterval(() => {
+        sendTrackerReport(false);
+        for (const trackerId of sharedStates.keys()) styleSharedMarker(trackerId);
+        if (!(tracking && receiving)) clearDistanceCircle();
+      }, SHARED_REPORT_INTERVAL_MS);
+      startLocation();
+    }
+
+    async function returnToSignIn(message) {
+      if (tracking) sendTrackerStop(TRACKER_NAME);
+      if (tracking) disconnectTracker();
+      showSignIn(message);
+      appStarted = false;
+    }
+
+    async function checkCurrentSession() {
+      try {
+        const response = await fetch("/api/auth/me", { credentials: "same-origin", cache: "no-store" });
+        const result = await response.json();
+        if (response.ok && result.authenticated && result.user) activateSignedInUser(result.user);
+        else showSignIn("");
+      } catch (_) {
+        showSignIn("Cannot reach the OpenTag backend. Check the network connection and try again.");
+      }
+    }
+
+    $("authForm").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const username = $("authUsername").value.trim();
+      const password = $("authPassword").value;
+      const endpoint = authMode === "register" ? "/api/auth/register" : "/api/auth/login";
+      $("authSubmit").disabled = true;
+      $("authError").textContent = authMode === "register" ? "Creating account…" : "Signing in…";
+      try {
+        const response = await fetch(endpoint, {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "Content-Type": "application/json", "Accept": "application/json" },
+          body: JSON.stringify({ username, password }),
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || "Authentication failed.");
+        $("authPassword").value = "";
+        activateSignedInUser(result.user);
+      } catch (error) {
+        $("authError").textContent = error.message || "Could not connect to the backend.";
+      } finally {
+        $("authSubmit").disabled = false;
+      }
+    });
+
+    $("authSwitch").addEventListener("click", () => setAuthMode(authMode === "login" ? "register" : "login"));
+    $("logoutBtn").addEventListener("click", async () => {
+      try {
+        if (tracking) { sendTrackerStop(TRACKER_NAME); disconnectTracker(); }
+        await fetch("/api/auth/logout", { method: "POST", credentials: "same-origin" });
+      } catch (_) {}
+      appStarted = false;
+      showSignIn("You have signed out.");
+      setAuthMode("login");
+    });
 
     window.addEventListener("beforeunload", () => {
       if (tracking) sendTrackerStop(TRACKER_NAME);
       try { sharedSocket?.close(); } catch (_) {}
     });
 
-    startLocation();
+    setAuthMode("login");
+    checkCurrentSession();
   </script>
 </body>
 </html>

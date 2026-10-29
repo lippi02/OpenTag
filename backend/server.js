@@ -3,75 +3,234 @@
 const http = require('node:http');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
+const path = require('node:path');
 
 const HOST = process.env.HOST || '0.0.0.0';
 const PORT = Number(process.env.PORT || 3000);
 const WS_PATH = process.env.WS_PATH || '/ws';
 const TRACKER_TTL_MS = Number(process.env.TRACKER_TTL_MS || 15000);
 const MAX_MESSAGE_BYTES = 32 * 1024;
-const MAX_TRACKERS = 200;
-const ACCESS_TOKEN = process.env.ACCESS_TOKEN || '';
+const MAX_BODY_BYTES = 8 * 1024;
+const MAX_TRACKERS_PER_USER = 100;
 const PING_INTERVAL_MS = Number(process.env.PING_INTERVAL_MS || 25000);
 const DATA_FILE = process.env.DATA_FILE || '';
+const AUTH_FILE = process.env.AUTH_FILE || (DATA_FILE ? path.join(path.dirname(DATA_FILE), 'auth.json') : '');
+const REGISTRATION_ENABLED = String(process.env.REGISTRATION_ENABLED || 'true').toLowerCase() !== 'false';
+const SESSION_COOKIE = 'opentag_session';
+const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const USERNAME_RE = /^[a-zA-Z0-9._-]{3,32}$/;
+const PASSWORD_MIN_LENGTH = 0;
+const SCRYPT_KEY_LENGTH = 64;
+const scryptAsync = require('node:util').promisify(crypto.scrypt);
 
-const trackerStates = new Map();
-const lastKnown = new Map();
+const users = new Map(); // userId -> { id, username, passwordSalt, passwordHash, createdAt }
+const sessions = new Map(); // sha256(session token) -> { userId, expiresAt }
+const trackerStates = new Map(); // user-scoped tracker ID -> live state
+const lastKnown = new Map(); // user-scoped tracker ID -> persisted last known state
 const clients = new Set();
+const authRateLimits = new Map();
+let saveTimer = null;
 
-function now() {
-  return Date.now();
-}
-
+function now() { return Date.now(); }
 function finiteNumber(value) {
   const n = Number(value);
   return Number.isFinite(n) ? n : null;
 }
-
 function validLatitude(value) {
   const n = finiteNumber(value);
   return n !== null && n >= -90 && n <= 90;
 }
-
 function validLongitude(value) {
   const n = finiteNumber(value);
   return n !== null && n >= -180 && n <= 180;
 }
-
 function clampText(value, maxLength) {
   if (typeof value !== 'string') return '';
   return value.trim().slice(0, maxLength);
 }
-
-function tokenOk(provided) {
-  if (!ACCESS_TOKEN) return true;
-  const a = crypto.createHash('sha256').update(String(provided || '')).digest();
-  const b = crypto.createHash('sha256').update(ACCESS_TOKEN).digest();
-  return crypto.timingSafeEqual(a, b);
+function jsonResponse(response, statusCode, data, extraHeaders = {}) {
+  response.writeHead(statusCode, {
+    'Content-Type': 'application/json; charset=utf-8',
+    'Cache-Control': 'no-store',
+    'X-Content-Type-Options': 'nosniff',
+    ...extraHeaders,
+  });
+  response.end(JSON.stringify(data));
 }
-
-let saveTimer = null;
-
+function safeUser(user) {
+  return { id: user.id, username: user.username, createdAt: user.createdAt };
+}
+function hashSession(token) {
+  return crypto.createHash('sha256').update(token).digest('hex');
+}
+function parseCookies(header) {
+  const out = Object.create(null);
+  for (const part of String(header || '').split(';')) {
+    const index = part.indexOf('=');
+    if (index < 1) continue;
+    const key = part.slice(0, index).trim();
+    const value = part.slice(index + 1).trim();
+    try { out[key] = decodeURIComponent(value); } catch (_) { out[key] = value; }
+  }
+  return out;
+}
+function isSecureRequest(request) {
+  const forwarded = String(request.headers['x-forwarded-proto'] || '').split(',')[0].trim().toLowerCase();
+  return request.socket.encrypted === true || forwarded === 'https';
+}
+function cookieHeader(request, token, maxAgeSeconds) {
+  const bits = [`${SESSION_COOKIE}=${encodeURIComponent(token)}`, 'Path=/', 'HttpOnly', 'SameSite=Lax', `Max-Age=${maxAgeSeconds}`];
+  if (isSecureRequest(request)) bits.push('Secure');
+  return bits.join('; ');
+}
+function setSessionCookie(request, response, token) {
+  response.setHeader('Set-Cookie', cookieHeader(request, token, Math.floor(SESSION_TTL_MS / 1000)));
+}
+function clearSessionCookie(request, response) {
+  response.setHeader('Set-Cookie', cookieHeader(request, '', 0));
+}
+function getSessionUser(request) {
+  const cookies = parseCookies(request.headers.cookie);
+  const token = cookies[SESSION_COOKIE];
+  if (!token) return null;
+  const key = hashSession(token);
+  const session = sessions.get(key);
+  if (!session) return null;
+  if (session.expiresAt <= now()) {
+    sessions.delete(key);
+    return null;
+  }
+  const user = users.get(session.userId);
+  if (!user) {
+    sessions.delete(key);
+    return null;
+  }
+  return user;
+}
+function createSession(user) {
+  const token = crypto.randomBytes(32).toString('base64url');
+  sessions.set(hashSession(token), { userId: user.id, expiresAt: now() + SESSION_TTL_MS });
+  return token;
+}
+function getClientIp(request) {
+  // NPMplus is a reverse proxy, so use its forwarded client address for per-visitor limits.
+  // This is rate limiting only (not an authorization decision).
+  const forwarded = String(request.headers['x-forwarded-for'] || '').split(',')[0].trim();
+  return forwarded || request.socket.remoteAddress || 'unknown';
+}
+function rateLimitAuth(request, response, route) {
+  const key = `${route}:${getClientIp(request)}`;
+  const cutoff = now() - 15 * 60 * 1000;
+  const timestamps = (authRateLimits.get(key) || []).filter(time => time > cutoff);
+  if (timestamps.length >= 12) {
+    authRateLimits.set(key, timestamps);
+    jsonResponse(response, 429, { error: 'Too many attempts. Please wait 15 minutes and try again.' }, { 'Retry-After': '900' });
+    return false;
+  }
+  timestamps.push(now());
+  authRateLimits.set(key, timestamps);
+  return true;
+}
+async function readJsonBody(request) {
+  const contentType = String(request.headers['content-type'] || '').toLowerCase();
+  if (!contentType.startsWith('application/json')) {
+    const error = new Error('Content-Type must be application/json');
+    error.statusCode = 415;
+    throw error;
+  }
+  const declaredLength = Number(request.headers['content-length'] || 0);
+  if (declaredLength > MAX_BODY_BYTES) {
+    const error = new Error('Request body is too large');
+    error.statusCode = 413;
+    throw error;
+  }
+  const chunks = [];
+  let total = 0;
+  for await (const chunk of request) {
+    total += chunk.length;
+    if (total > MAX_BODY_BYTES) {
+      const error = new Error('Request body is too large');
+      error.statusCode = 413;
+      throw error;
+    }
+    chunks.push(chunk);
+  }
+  try {
+    const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    if (!body || typeof body !== 'object' || Array.isArray(body)) throw new Error('Expected an object');
+    return body;
+  } catch (_) {
+    const error = new Error('Invalid JSON body');
+    error.statusCode = 400;
+    throw error;
+  }
+}
 function scheduleSave() {
   if (!DATA_FILE || saveTimer) return;
   saveTimer = setTimeout(() => {
     saveTimer = null;
     const tmp = `${DATA_FILE}.tmp`;
     try {
-      fs.writeFileSync(tmp, JSON.stringify([...lastKnown.values()]));
+      fs.mkdirSync(path.dirname(DATA_FILE), { recursive: true });
+      fs.writeFileSync(tmp, JSON.stringify([...lastKnown.values()]), { mode: 0o600 });
       fs.renameSync(tmp, DATA_FILE);
     } catch (error) {
       console.warn(`Could not save ${DATA_FILE}: ${error.message}`);
     }
   }, 5000);
 }
-
+function saveUsers() {
+  if (!AUTH_FILE) {
+    console.warn('AUTH_FILE is not configured; registered users will not survive a restart. Configure a persistent /data directory.');
+    return;
+  }
+  const tmp = `${AUTH_FILE}.tmp`;
+  try {
+    fs.mkdirSync(path.dirname(AUTH_FILE), { recursive: true });
+    fs.writeFileSync(tmp, JSON.stringify({ version: 1, users: [...users.values()] }), { mode: 0o600 });
+    fs.renameSync(tmp, AUTH_FILE);
+  } catch (error) {
+    console.error(`Could not save authentication database ${AUTH_FILE}: ${error.message}`);
+    throw new Error('Could not save account data. Check that the persistent data directory is writable.');
+  }
+}
+function loadUsers() {
+  if (!AUTH_FILE) {
+    console.warn('AUTH_FILE is not configured; account database will be memory-only.');
+    return;
+  }
+  try {
+    const parsed = JSON.parse(fs.readFileSync(AUTH_FILE, 'utf8'));
+    for (const item of Array.isArray(parsed.users) ? parsed.users : []) {
+      if (!item || typeof item.id !== 'string' || typeof item.username !== 'string' ||
+          typeof item.passwordSalt !== 'string' || typeof item.passwordHash !== 'string') continue;
+      users.set(item.id, item);
+    }
+    console.log(`Loaded ${users.size} account(s) from ${AUTH_FILE}`);
+  } catch (error) {
+    if (error.code !== 'ENOENT') console.error(`Could not load account database: ${error.message}`);
+  }
+}
+function sanitizeLocation(location) {
+  if (!location || !validLatitude(location.lat) || !validLongitude(location.lng)) return null;
+  const accuracy = finiteNumber(location.accuracy);
+  return {
+    lat: Number(location.lat),
+    lng: Number(location.lng),
+    accuracy: accuracy !== null && accuracy >= 0 && accuracy <= 100000 ? accuracy : null,
+  };
+}
+function scopedTrackerId(userId, rawTrackerId) {
+  const clean = clampText(rawTrackerId, 100);
+  return clean ? `${userId}:${clean}` : '';
+}
 function loadLastKnown() {
   if (!DATA_FILE) return;
   try {
     const data = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
     for (const item of Array.isArray(data) ? data : []) {
       const location = sanitizeLocation(item && item.location);
-      const trackerId = clampText(item && item.trackerId, 100);
+      const trackerId = clampText(item && item.trackerId, 140);
       if (!trackerId || !location) continue;
       lastKnown.set(trackerId, { ...item, trackerId, location, live: false });
     }
@@ -80,79 +239,77 @@ function loadLastKnown() {
     if (error.code !== 'ENOENT') console.warn(`Could not load ${DATA_FILE}: ${error.message}`);
   }
 }
-
-function lastKnownSnapshot() {
-  return [...lastKnown.values()];
-}
-
-function sanitizeLocation(location) {
-  if (!location || !validLatitude(location.lat) || !validLongitude(location.lng)) {
-    return null;
+function migrateLegacyPositionsToFirstUser(userId) {
+  let changed = false;
+  for (const [oldId, item] of [...lastKnown.entries()]) {
+    if (item.userId) continue;
+    const rawId = clampText(item.trackerName || item.trackerId || oldId, 100);
+    const newId = scopedTrackerId(userId, rawId);
+    lastKnown.delete(oldId);
+    lastKnown.set(newId, { ...item, trackerId: newId, trackerName: item.trackerName || rawId, userId, live: false });
+    changed = true;
   }
-
-  const accuracy = finiteNumber(location.accuracy);
-  return {
-    lat: Number(location.lat),
-    lng: Number(location.lng),
-    accuracy: accuracy !== null && accuracy >= 0 && accuracy <= 100000
-      ? accuracy
-      : null,
-  };
-}
-
-function sanitizeReport(message, clientId) {
-  const trackerId = clampText(message.trackerId, 100);
-  const trackerName = clampText(message.trackerName || trackerId, 100);
-
-  if (!trackerId) {
-    throw new Error('trackerId is required');
+  if (changed) {
+    console.log(`Migrated legacy unowned position(s) to the first account (${userId}).`);
+    scheduleSave();
   }
-
+}
+function lastKnownSnapshot(userId) {
+  return [...lastKnown.values()]
+    .filter(state => state.userId === userId)
+    .map(publicState);
+}
+function publicState(state) {
+  const { userId, reporterId, ...safe } = state;
+  return safe;
+}
+function stateSnapshot(userId) {
+  const cutoff = now() - TRACKER_TTL_MS;
+  const states = [];
+  for (const [trackerId, state] of trackerStates) {
+    if (state.updatedAt < cutoff) {
+      trackerStates.delete(trackerId);
+      broadcastToUser(state.userId, {
+        type: 'trackerRemoved',
+        trackerId,
+        lastKnown: lastKnown.get(trackerId) ? publicState(lastKnown.get(trackerId)) : null,
+        reason: 'stale',
+        at: now(),
+      });
+      continue;
+    }
+    if (state.userId === userId) states.push(publicState(state));
+  }
+  return states;
+}
+function sanitizeReport(message, client) {
+  const rawTrackerId = clampText(message.trackerId, 100);
+  const trackerName = clampText(message.trackerName || rawTrackerId, 100);
+  if (!rawTrackerId) throw new Error('trackerId is required');
+  const trackerId = scopedTrackerId(client.userId, rawTrackerId);
   const rssi = finiteNumber(message.rssi);
   const txPower = finiteNumber(message.txPower);
   const distanceM = finiteNumber(message.distanceM);
   const location = sanitizeLocation(message.location);
   const mode = message.mode === 'lost' ? 'lost' : 'normal';
-
   return {
     trackerId,
     trackerName,
     location,
     rssi: rssi !== null && rssi >= -150 && rssi <= 0 ? rssi : null,
     txPower: txPower !== null && txPower >= -100 && txPower <= 30 ? txPower : null,
-    distanceM: distanceM !== null && distanceM >= 0 && distanceM <= 100000
-      ? distanceM
-      : null,
+    distanceM: distanceM !== null && distanceM >= 0 && distanceM <= 100000 ? distanceM : null,
     mode,
     live: true,
-    reporterId: clientId,
+    userId: client.userId,
+    reporterId: client.clientId,
     updatedAt: now(),
-    lastBlePacketAt: Number.isFinite(Number(message.lastBlePacketAt))
-      ? Number(message.lastBlePacketAt)
-      : now(),
+    lastBlePacketAt: Number.isFinite(Number(message.lastBlePacketAt)) ? Number(message.lastBlePacketAt) : now(),
   };
 }
-
-function stateSnapshot() {
-  const cutoff = now() - TRACKER_TTL_MS;
-  const states = [];
-  for (const [trackerId, state] of trackerStates) {
-    if (state.updatedAt < cutoff) {
-      trackerStates.delete(trackerId);
-      continue;
-    }
-    states.push(state);
-  }
-  return states;
-}
-
 function sendFrame(socket, opcode, payloadBuffer = Buffer.alloc(0)) {
   if (socket.destroyed) return;
-
-  const payload = Buffer.isBuffer(payloadBuffer)
-    ? payloadBuffer
-    : Buffer.from(payloadBuffer);
-
+  const payload = Buffer.isBuffer(payloadBuffer) ? payloadBuffer : Buffer.from(payloadBuffer);
   let header;
   if (payload.length < 126) {
     header = Buffer.from([0x80 | opcode, payload.length]);
@@ -167,96 +324,70 @@ function sendFrame(socket, opcode, payloadBuffer = Buffer.alloc(0)) {
     header[1] = 127;
     header.writeBigUInt64BE(BigInt(payload.length), 2);
   }
-
   socket.write(Buffer.concat([header, payload]));
 }
-
 function sendJson(client, message) {
   sendFrame(client.socket, 0x1, Buffer.from(JSON.stringify(message)));
 }
-
-function broadcast(message) {
+function broadcastToUser(userId, message) {
   for (const client of clients) {
-    try {
-      sendJson(client, message);
-    } catch (_) {
-      destroyClient(client);
-    }
+    if (client.userId !== userId) continue;
+    try { sendJson(client, message); } catch (_) { destroyClient(client); }
   }
 }
-
-function removeTrackerForClient(clientId, trackerId) {
+function removeTrackerForClient(client, rawTrackerId) {
+  const trackerId = scopedTrackerId(client.userId, rawTrackerId);
   const state = trackerStates.get(trackerId);
-  if (!state || state.reporterId !== clientId) return false;
-
+  if (!state || state.userId !== client.userId || state.reporterId !== client.clientId) return false;
   trackerStates.delete(trackerId);
-  broadcast({
-    type: 'trackerRemoved',
-    trackerId,
-    lastKnown: lastKnown.get(trackerId) || null,
-    reason: 'reporter_disconnected',
-    at: now(),
+  broadcastToUser(client.userId, {
+    type: 'trackerRemoved', trackerId,
+    lastKnown: lastKnown.get(trackerId) ? publicState(lastKnown.get(trackerId)) : null,
+    reason: 'reporter_disconnected', at: now(),
   });
   return true;
 }
-
 function handleMessage(client, message) {
   if (!message || typeof message !== 'object') return;
-
   if (message.type === 'hello') {
-    sendJson(client, {
-      type: 'helloAck',
-      clientId: client.clientId,
-      serverTime: now(),
-    });
-
+    sendJson(client, { type: 'helloAck', clientId: client.clientId, serverTime: now() });
     sendJson(client, {
       type: 'snapshot',
-      trackers: stateSnapshot(),
-      lastKnown: lastKnownSnapshot(),
+      trackers: stateSnapshot(client.userId),
+      lastKnown: lastKnownSnapshot(client.userId),
       serverTime: now(),
     });
     return;
   }
-
   if (message.type === 'trackerReport') {
     try {
-      const state = sanitizeReport(message, client.clientId);
-      const known = trackerStates.has(state.trackerId) || lastKnown.has(state.trackerId);
-      if (!known && Math.max(trackerStates.size, lastKnown.size) >= MAX_TRACKERS) {
-        throw new Error('Too many trackers');
+      const state = sanitizeReport(message, client);
+      const knownForUser = new Set(
+        [...trackerStates.values(), ...lastKnown.values()]
+          .filter(item => item.userId === client.userId)
+          .map(item => item.trackerId)
+      );
+      if (!knownForUser.has(state.trackerId) && knownForUser.size >= MAX_TRACKERS_PER_USER) {
+        throw new Error('This account has reached the tracker limit');
       }
       trackerStates.set(state.trackerId, state);
       if (state.location) {
         lastKnown.set(state.trackerId, { ...state, live: false });
         scheduleSave();
       }
-
-      broadcast({
-        type: 'trackerState',
-        state,
-      });
+      broadcastToUser(client.userId, { type: 'trackerState', state: publicState(state) });
     } catch (error) {
-      sendJson(client, {
-        type: 'error',
-        message: error.message,
-      });
+      sendJson(client, { type: 'error', message: error.message });
     }
     return;
   }
-
   if (message.type === 'trackerStop') {
-    const trackerId = clampText(message.trackerId, 100);
-    if (trackerId) removeTrackerForClient(client.clientId, trackerId);
+    const rawTrackerId = clampText(message.trackerId, 100);
+    if (rawTrackerId) removeTrackerForClient(client, rawTrackerId);
     return;
   }
-
-  sendJson(client, {
-    type: 'error',
-    message: `Unknown message type: ${String(message.type || 'undefined')}`,
-  });
+  sendJson(client, { type: 'error', message: `Unknown message type: ${String(message.type || 'undefined')}` });
 }
-
 function processWebSocketBuffer(client) {
   while (client.buffer.length >= 2) {
     const first = client.buffer[0];
@@ -266,13 +397,11 @@ function processWebSocketBuffer(client) {
     const masked = Boolean(second & 0x80);
     let payloadLength = second & 0x7f;
     let offset = 2;
-
     if (!masked) {
       sendFrame(client.socket, 0x8, Buffer.from([0x03, 0xea]));
       client.socket.end();
       return;
     }
-
     if (payloadLength === 126) {
       if (client.buffer.length < offset + 2) return;
       payloadLength = client.buffer.readUInt16BE(offset);
@@ -288,187 +417,204 @@ function processWebSocketBuffer(client) {
       payloadLength = Number(length64);
       offset += 8;
     }
-
     if (payloadLength > MAX_MESSAGE_BYTES) {
       sendFrame(client.socket, 0x8, Buffer.from([0x03, 0xf1]));
       client.socket.end();
       return;
     }
-
     const frameLength = offset + 4 + payloadLength;
     if (client.buffer.length < frameLength) return;
-
     const mask = client.buffer.subarray(offset, offset + 4);
     offset += 4;
     const payload = Buffer.from(client.buffer.subarray(offset, offset + payloadLength));
     client.buffer = client.buffer.subarray(frameLength);
     client.alive = true;
-
-    for (let i = 0; i < payload.length; i++) {
-      payload[i] ^= mask[i % 4];
-    }
-
+    for (let i = 0; i < payload.length; i++) payload[i] ^= mask[i % 4];
     if (!fin && opcode < 8) {
       sendFrame(client.socket, 0x8, Buffer.from([0x03, 0xeb]));
       client.socket.end();
       return;
     }
-
     if (opcode === 0x1) {
-      try {
-        const text = payload.toString('utf8');
-        handleMessage(client, JSON.parse(text));
-      } catch (error) {
-        sendJson(client, {
-          type: 'error',
-          message: 'Invalid JSON message',
-        });
-      }
+      try { handleMessage(client, JSON.parse(payload.toString('utf8'))); }
+      catch (_) { sendJson(client, { type: 'error', message: 'Invalid JSON message' }); }
     } else if (opcode === 0x8) {
       sendFrame(client.socket, 0x8, payload);
       client.socket.end();
       return;
     } else if (opcode === 0x9) {
       sendFrame(client.socket, 0xA, payload);
-    } else if (opcode === 0xA) {
-    } else {
+    } else if (opcode !== 0xA) {
       sendFrame(client.socket, 0x8, Buffer.from([0x03, 0xeb]));
       client.socket.end();
       return;
     }
   }
 }
-
 function destroyClient(client) {
   if (client.destroyed) return;
   client.destroyed = true;
   clients.delete(client);
-
   for (const [trackerId, state] of trackerStates) {
-    if (state.reporterId === client.clientId) {
+    if (state.reporterId === client.clientId && state.userId === client.userId) {
       trackerStates.delete(trackerId);
-      broadcast({
-        type: 'trackerRemoved',
-        trackerId,
-        lastKnown: lastKnown.get(trackerId) || null,
-        reason: 'reporter_disconnected',
-        at: now(),
+      broadcastToUser(client.userId, {
+        type: 'trackerRemoved', trackerId,
+        lastKnown: lastKnown.get(trackerId) ? publicState(lastKnown.get(trackerId)) : null,
+        reason: 'reporter_disconnected', at: now(),
       });
     }
   }
-
   try { client.socket.destroy(); } catch (_) {}
 }
-
 function handleUpgrade(request, socket) {
   const url = new URL(request.url, 'http://localhost');
   const expectedWsPath = (WS_PATH || '/ws').replace(/\/+$/, '') || '/ws';
   if (request.method !== 'GET' || (url.pathname !== expectedWsPath && url.pathname !== `${expectedWsPath}/`)) {
+    socket.write('HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n');
     socket.destroy();
     return;
   }
-
-  if (!tokenOk(url.searchParams.get('token'))) {
-    socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n');
+  const user = getSessionUser(request);
+  if (!user) {
+    socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\nCache-Control: no-store\r\n\r\n');
     socket.destroy();
     return;
   }
-
   const upgrade = String(request.headers.upgrade || '').toLowerCase();
   const connection = String(request.headers.connection || '').toLowerCase();
   const key = request.headers['sec-websocket-key'];
   const version = String(request.headers['sec-websocket-version'] || '');
-
   if (upgrade !== 'websocket' || !connection.includes('upgrade') || !key || version !== '13') {
     socket.write('HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n');
     socket.destroy();
     return;
   }
-
-  const accept = crypto
-    .createHash('sha1')
-    .update(key + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11')
-    .digest('base64');
-
-  socket.write(
-    'HTTP/1.1 101 Switching Protocols\r\n' +
-    'Upgrade: websocket\r\n' +
-    'Connection: Upgrade\r\n' +
-    `Sec-WebSocket-Accept: ${accept}\r\n` +
-    '\r\n'
-  );
-
+  const accept = crypto.createHash('sha1').update(key + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest('base64');
+  socket.write('HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n' + `Sec-WebSocket-Accept: ${accept}\r\n\r\n`);
+  const cookies = parseCookies(request.headers.cookie);
+  const sessionKey = hashSession(cookies[SESSION_COOKIE]);
   const client = {
     socket,
     clientId: crypto.randomUUID(),
+    sessionKey,
+    userId: user.id,
     buffer: Buffer.alloc(0),
     destroyed: false,
     alive: true,
   };
-
   clients.add(client);
-
-  socket.on('data', (chunk) => {
+  socket.on('data', chunk => {
     if (client.destroyed) return;
     client.buffer = Buffer.concat([client.buffer, chunk]);
     processWebSocketBuffer(client);
   });
-
   socket.on('close', () => destroyClient(client));
   socket.on('end', () => destroyClient(client));
   socket.on('error', () => destroyClient(client));
-
+}
+async function registerAccount(request, response) {
+  if (!REGISTRATION_ENABLED) return jsonResponse(response, 403, { error: 'Registration is currently disabled.' });
+  if (!rateLimitAuth(request, response, 'register')) return;
+  const body = await readJsonBody(request);
+  const username = clampText(body.username, 32).toLowerCase();
+  const password = typeof body.password === 'string' ? body.password : '';
+  if (!USERNAME_RE.test(username)) {
+    return jsonResponse(response, 400, { error: 'Username must be 3–32 characters and contain only letters, numbers, dot, underscore, or hyphen.' });
+  }
+  if (password.length < PASSWORD_MIN_LENGTH || password.length > 128) {
+    return jsonResponse(response, 400, { error: 'Password must be between 10 and 128 characters.' });
+  }
+  if ([...users.values()].some(user => user.username === username)) {
+    return jsonResponse(response, 409, { error: 'That username is already taken.' });
+  }
+  const isFirstUser = users.size === 0;
+  const salt = crypto.randomBytes(16);
+  const hash = await scryptAsync(password, salt, SCRYPT_KEY_LENGTH);
+  const user = {
+    id: crypto.randomUUID(),
+    username,
+    passwordSalt: salt.toString('base64url'),
+    passwordHash: Buffer.from(hash).toString('base64url'),
+    createdAt: now(),
+  };
+  users.set(user.id, user);
+  try {
+    saveUsers();
+  } catch (error) {
+    users.delete(user.id);
+    throw error;
+  }
+  if (isFirstUser) migrateLegacyPositionsToFirstUser(user.id);
+  const token = createSession(user);
+  setSessionCookie(request, response, token);
+  jsonResponse(response, 201, { ok: true, user: safeUser(user) });
+}
+async function loginAccount(request, response) {
+  if (!rateLimitAuth(request, response, 'login')) return;
+  const body = await readJsonBody(request);
+  const username = clampText(body.username, 32).toLowerCase();
+  const password = typeof body.password === 'string' ? body.password : '';
+  const user = [...users.values()].find(item => item.username === username);
+  let valid = false;
+  if (user && password.length <= 128) {
+    try {
+      const candidate = Buffer.from(await scryptAsync(password, Buffer.from(user.passwordSalt, 'base64url'), SCRYPT_KEY_LENGTH));
+      const saved = Buffer.from(user.passwordHash, 'base64url');
+      valid = candidate.length === saved.length && crypto.timingSafeEqual(candidate, saved);
+    } catch (_) { valid = false; }
+  }
+  if (!valid) return jsonResponse(response, 401, { error: 'Incorrect username or password.' });
+  const token = createSession(user);
+  setSessionCookie(request, response, token);
+  jsonResponse(response, 200, { ok: true, user: safeUser(user) });
+}
+function logoutAccount(request, response) {
+  const cookies = parseCookies(request.headers.cookie);
+  const token = cookies[SESSION_COOKIE];
+  const sessionKey = token ? hashSession(token) : '';
+  if (sessionKey) sessions.delete(sessionKey);
+  // Revoke active WebSocket connections that authenticated with this exact session.
+  if (sessionKey) {
+    for (const client of [...clients]) {
+      if (client.sessionKey === sessionKey) destroyClient(client);
+    }
+  }
+  clearSessionCookie(request, response);
+  jsonResponse(response, 200, { ok: true });
 }
 
-const server = http.createServer((request, response) => {
+const server = http.createServer(async (request, response) => {
   const url = new URL(request.url, `http://${request.headers.host || 'localhost'}`);
-
-  if (request.method === 'GET' && url.pathname === '/api/health') {
-    const body = JSON.stringify({
-      ok: true,
-      service: 'opentag-backend',
-      time: now(),
-      clients: clients.size,
-      trackers: stateSnapshot().length,
-    });
-
-    response.writeHead(200, {
-      'Content-Type': 'application/json; charset=utf-8',
-      'Cache-Control': 'no-store',
-    });
-    response.end(body);
-    return;
-  }
-
-  if (request.method === 'GET' && url.pathname === '/api/state') {
-    const provided = url.searchParams.get('token') || request.headers['x-access-token'];
-    if (!tokenOk(provided)) {
-      response.writeHead(401, { 'Content-Type': 'application/json; charset=utf-8' });
-      response.end(JSON.stringify({ error: 'Unauthorized' }));
-      return;
+  try {
+    if (request.method === 'GET' && url.pathname === '/api/health') {
+      return jsonResponse(response, 200, { ok: true, service: 'opentag-backend', time: now() });
     }
-    const body = JSON.stringify({
-      trackers: stateSnapshot(),
-      lastKnown: lastKnownSnapshot(),
-      serverTime: now(),
-    });
+    if (request.method === 'GET' && url.pathname === '/api/auth/me') {
+      const user = getSessionUser(request);
+      return jsonResponse(response, 200, user ? { authenticated: true, user: safeUser(user) } : { authenticated: false });
+    }
+    if (request.method === 'POST' && url.pathname === '/api/auth/register') return await registerAccount(request, response);
+    if (request.method === 'POST' && url.pathname === '/api/auth/login') return await loginAccount(request, response);
+    if (request.method === 'POST' && url.pathname === '/api/auth/logout') return logoutAccount(request, response);
 
-    response.writeHead(200, {
-      'Content-Type': 'application/json; charset=utf-8',
-      'Cache-Control': 'no-store, no-cache, must-revalidate',
-      'Pragma': 'no-cache',
-      'Expires': '0',
-    });
-    response.end(body);
-    return;
+    if (request.method === 'GET' && url.pathname === '/api/state') {
+      const user = getSessionUser(request);
+      if (!user) return jsonResponse(response, 401, { error: 'Authentication required.' });
+      const body = {
+        trackers: stateSnapshot(user.id),
+        lastKnown: lastKnownSnapshot(user.id),
+        serverTime: now(),
+      };
+      return jsonResponse(response, 200, body, { 'Cache-Control': 'no-store, no-cache, must-revalidate', Pragma: 'no-cache', Expires: '0' });
+    }
+    return jsonResponse(response, 404, { error: 'Not found' });
+  } catch (error) {
+    const statusCode = Number.isInteger(error.statusCode) ? error.statusCode : 500;
+    if (statusCode >= 500) console.error(`Request failed (${request.method} ${url.pathname}): ${error.message}`);
+    return jsonResponse(response, statusCode, { error: statusCode >= 500 ? 'Internal server error.' : error.message });
   }
-
-  response.writeHead(404, {
-    'Content-Type': 'application/json; charset=utf-8',
-  });
-  response.end(JSON.stringify({ error: 'Not found' }));
 });
-
 server.on('upgrade', handleUpgrade);
 
 setInterval(() => {
@@ -476,38 +622,39 @@ setInterval(() => {
   for (const [trackerId, state] of trackerStates) {
     if (state.updatedAt < cutoff) {
       trackerStates.delete(trackerId);
-      broadcast({
-        type: 'trackerRemoved',
-        trackerId,
-        lastKnown: lastKnown.get(trackerId) || null,
-        reason: 'stale',
-        at: now(),
+      broadcastToUser(state.userId, {
+        type: 'trackerRemoved', trackerId,
+        lastKnown: lastKnown.get(trackerId) ? publicState(lastKnown.get(trackerId)) : null,
+        reason: 'stale', at: now(),
       });
     }
   }
 }, 5000).unref();
 
 setInterval(() => {
+  for (const [key, session] of sessions) if (session.expiresAt <= now()) sessions.delete(key);
   for (const client of [...clients]) {
-    if (!client.alive) {
-      destroyClient(client);
-      continue;
-    }
+    if (!sessions.has(client.sessionKey)) destroyClient(client);
+  }
+  for (const [key, timestamps] of authRateLimits) {
+    const recent = timestamps.filter(time => time > now() - 15 * 60 * 1000);
+    if (recent.length) authRateLimits.set(key, recent); else authRateLimits.delete(key);
+  }
+  for (const client of [...clients]) {
+    if (!client.alive) { destroyClient(client); continue; }
     client.alive = false;
-    try {
-      sendFrame(client.socket, 0x9);
-    } catch (_) {
-      destroyClient(client);
-    }
+    try { sendFrame(client.socket, 0x9); } catch (_) { destroyClient(client); }
   }
 }, PING_INTERVAL_MS).unref();
 
+loadUsers();
 loadLastKnown();
 
 server.listen(PORT, HOST, () => {
-  console.log(`OpenTag backend listening on http://${HOST}:${PORT}`);
+  console.log(`OpenTag Phase 2 backend listening on http://${HOST}:${PORT}`);
   console.log(`WebSocket endpoint: ${WS_PATH}`);
   console.log(`Tracker state TTL: ${TRACKER_TTL_MS} ms`);
-  console.log(`Access code: ${ACCESS_TOKEN ? 'required' : 'NOT SET (open access)'}`);
+  console.log(`Account registration: ${REGISTRATION_ENABLED ? 'enabled' : 'disabled'}`);
+  console.log(`Authentication database: ${AUTH_FILE || 'none (memory only)'}`);
   console.log(`Last known positions file: ${DATA_FILE || 'none (memory only)'}`);
 });
