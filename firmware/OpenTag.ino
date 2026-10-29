@@ -1,15 +1,5 @@
 #include <bluefruit.h>
 
-// -----------------------------------------------------------------------------
-// OpenTag GATT control
-// -----------------------------------------------------------------------------
-// 0 = NORMAL, 1 = LOST
-//
-// The browser uses GATT only for a short control transaction; RSSI measurement
-// itself is advertising-based. Advertising is restarted from loop(), not from
-// the BLE event callbacks.
-// -----------------------------------------------------------------------------
-
 BLEService controlService("19b10000-e8f2-537e-4f6c-d104768a1214");
 BLECharacteristic modeCharacteristic("19b10001-e8f2-537e-4f6c-d104768a1214");
 
@@ -25,10 +15,6 @@ const int8_t   LOST_TX_POWER    = 8;
 const uint32_t NORMAL_LED_PERIOD_MS = 2000;
 const uint32_t LOST_LED_PERIOD_MS   = 300;
 const uint32_t LED_PULSE_MS         = 30;
-
-// -----------------------------------------------------------------------------
-// Advertising
-// -----------------------------------------------------------------------------
 
 void buildAdvertisingData()
 {
@@ -59,10 +45,6 @@ void startAdvertisingMode(bool lost)
   Serial.print("Advertising mode: ");
   Serial.println(lost ? "LOST" : "NORMAL");
 }
-
-// -----------------------------------------------------------------------------
-// BLE callbacks
-// -----------------------------------------------------------------------------
 
 void connect_callback(uint16_t conn_handle)
 {
@@ -101,10 +83,6 @@ void mode_write_callback(uint16_t conn_hdl, BLECharacteristic* chr,
   restartAdvertisingPending = true;
 }
 
-// -----------------------------------------------------------------------------
-// Setup
-// -----------------------------------------------------------------------------
-
 void setup()
 {
   pinMode(LED_BUILTIN, OUTPUT);
@@ -134,10 +112,6 @@ void setup()
 
   startAdvertisingMode(false);
 }
-
-// -----------------------------------------------------------------------------
-// Main loop
-// -----------------------------------------------------------------------------
 
 void loop()
 {
