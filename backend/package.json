@@ -2,7 +2,7 @@
   "name": "opentag-backend",
   "version": "1.0.0",
   "private": true,
-  "description": "OpenTag Phase 2 account-based BLE backend",
+  "description": "OpenTag BLE tracker backend",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
