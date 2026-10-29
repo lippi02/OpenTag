@@ -23,8 +23,8 @@ Same goes for browsers. Chromium browsers will 100% work, but I don't know what 
  9. Install NGINX Proxy Manager Plus (Use Host Path, instead of ixVolume)
  10. Create a Custom App for the backend (Discover Apps, 3 dot, Install via YML) using the truenas-custom-app.yaml
  11. Create a DDNS (I used [No-IP](noip.com), but you can use whatever you want)
- 12. Move the opentag folder into the NGINX's host folder eg: "\\TRUENAS\apps\nginxpmplus\opentag" (This is a generic location, you may have to change it according to your setup)
- 13. Create a Proxy Host, where: Domain Name {Your DDNS}; Scheme: "path:" ; Forward Hostname / IP / Path: "/data/opentag/webapp/" (You may have to change it according to your setup); Leave everything else as is
+ 12. Move the opentag folder into the NGINX's host folder eg: "\\TRUENAS\apps\nginxpmplus\opentag" *(This is a generic location, you may have to change it according to your setup)*
+ 13. Create a Proxy Host, where: Domain Name {Your DDNS}; Scheme: "path:" ; Forward Hostname / IP / Path: "/data/opentag/webapp/" *(You may have to change it according to your setup)*; Leave everything else as is
  14. Go to Custom Locations /path: "/ws/"; Scheme: "http://"; Forward Hostname / IP / Path: {Your NAS' IP}; Forward Port: "3000"
  16. Scroll down and click on "Add Location", then fill everything as in step 14, but /path: should be /api/ instead of /ws/
  17. Switch to TLS, In the dropdown menu select "Request a new Certificate"; and check "Force HTTPS"; Leave everything else as is\
