@@ -1,9 +1,7 @@
-# OpenTag Phase 1 backend for TrueNAS SCALE Custom App (Install via YAML).
-# If your TrueNAS storage path differs, change only the host path under volumes.
+# Expected backend files: /mnt/Cache/Apps/nginxpmplus/opentag/backend/server.js and package.json
 services:
   opentag-backend:
     image: node:22-alpine
-    container_name: opentag-backend
     restart: unless-stopped
     working_dir: /app
     command: ["node", "server.js"]
@@ -13,15 +11,13 @@ services:
       PORT: 3000
       WS_PATH: /ws
       TRACKER_TTL_MS: 15000
-      # Közös belépési kód: CSERÉLD LE egy hosszú, véletlen szövegre! Üresen hagyva nincs védelem.
-      ACCESS_TOKEN: "CHANGE_ME_long_random_code"
-      # Az utolsó ismert pozíciók ide mentődnek, így újraindítás után sem vesznek el.
+      REGISTRATION_ENABLED: "true"
+      AUTH_FILE: /data/auth.json
       DATA_FILE: /data/lastknown.json
     ports:
       - "192.168.1.101:3000:3000"
     volumes:
-      - /mnt/Cache/Apps/nginxpmplus/opentag-backend:/app:ro
-      # ÍRHATÓ mappa az utolsó ismert pozícióknak (hozd létre a TrueNAS-on).
+      - /mnt/Cache/Apps/nginxpmplus/opentag/backend:/app:ro
       - /mnt/Cache/Apps/nginxpmplus/opentag-data:/data
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
