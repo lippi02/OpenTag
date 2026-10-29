@@ -193,6 +193,7 @@ function removeTrackerForClient(clientId, trackerId) {
   broadcast({
     type: 'trackerRemoved',
     trackerId,
+    lastKnown: lastKnown.get(trackerId) || null,
     reason: 'reporter_disconnected',
     at: now(),
   });
@@ -349,6 +350,7 @@ function destroyClient(client) {
       broadcast({
         type: 'trackerRemoved',
         trackerId,
+        lastKnown: lastKnown.get(trackerId) || null,
         reason: 'reporter_disconnected',
         at: now(),
       });
@@ -453,7 +455,9 @@ const server = http.createServer((request, response) => {
 
     response.writeHead(200, {
       'Content-Type': 'application/json; charset=utf-8',
-      'Cache-Control': 'no-store',
+      'Cache-Control': 'no-store, no-cache, must-revalidate',
+      'Pragma': 'no-cache',
+      'Expires': '0',
     });
     response.end(body);
     return;
@@ -475,6 +479,7 @@ setInterval(() => {
       broadcast({
         type: 'trackerRemoved',
         trackerId,
+        lastKnown: lastKnown.get(trackerId) || null,
         reason: 'stale',
         at: now(),
       });

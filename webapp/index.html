@@ -277,8 +277,8 @@
 
         <div class="map-legend">
           <span class="pill">🔵 Own Position</span>
-          <span class="pill">🟡 Tracker Postion</span>
-          <span class="pill">🟠 Tracker's Last Known Position</span>
+          <span class="pill">🟡 Tracker online: live report</span>
+          <span class="pill">🟠 Tracker offline: last known location</span>
           <span class="pill" id="backendPill">⚪ Shared backend: connecting…</span>
         </div>
 
@@ -326,6 +326,12 @@
     let sharedReconnectDelay = 1000;
     let sharedClientId = null;
     let sharedEverOpened = false;
+    let sharedStatePollTimer = null;
+    let statePollAuthWarningShown = false;
+    let initialSharedSyncComplete = false;
+    let initialMapFitDone = false;
+    let programmaticMapMove = false;
+    let userMovedMap = false;
 
     (function rememberAccessToken() {
       const params = new URLSearchParams(location.search);
@@ -363,6 +369,9 @@
       maxZoom: 19,
       attribution: '&copy; OpenStreetMap közreműködők'
     }).addTo(map);
+
+    map.on("dragstart", () => { if (!programmaticMapMove) userMovedMap = true; });
+    map.on("zoomstart", () => { if (!programmaticMapMove) userMovedMap = true; });
 
     function backendWebSocketUrl() {
       const protocol = location.protocol === "https:" ? "wss:" : "ws:";
@@ -426,22 +435,40 @@
       const marker = sharedMarkers.get(trackerId);
       if (!state || !marker) return;
       const live = sharedStateIsLive(state);
-      marker.setStyle({ fillOpacity: live ? 1 : 0.5, opacity: live ? 1 : 0.7 });
+      // Live reports are yellow; retained/offline positions are visibly orange, never faded to grey.
+      marker.setStyle({
+        color: live ? "#854d0e" : "#9a3412",
+        fillColor: live ? "#facc15" : "#f97316",
+        fillOpacity: 1,
+        opacity: 1,
+        weight: 2
+      });
       const circle = sharedAccuracyCircles.get(trackerId);
-      if (circle) circle.setStyle({ fillOpacity: live ? 0.10 : 0.04, opacity: live ? 1 : 0.5 });
+      if (circle) circle.setStyle({
+        color: live ? "#facc15" : "#f97316",
+        fillColor: live ? "#facc15" : "#f97316",
+        fillOpacity: live ? 0.10 : 0.04,
+        opacity: live ? 1 : 0.65
+      });
     }
 
     function renderSharedTrackerState(state) {
       if (!state || !state.trackerId || !state.location) return;
 
       const id = state.trackerId;
+      const existing = sharedStates.get(id);
+      const incomingUpdatedAt = Number(state.updatedAt) || 0;
+      const existingUpdatedAt = Number(existing?.updatedAt) || 0;
+      // Ignore a delayed HTTP snapshot if this browser already has a newer report.
+      if (existing && incomingUpdatedAt < existingUpdatedAt) return;
+
       sharedStates.set(id, state);
       const latLng = [state.location.lat, state.location.lng];
 
       let marker = sharedMarkers.get(id);
       if (!marker) {
         marker = L.circleMarker(latLng, {
-          radius: 7, color: "#111827", weight: 2,
+          radius: 8, color: "#854d0e", weight: 2,
           fillColor: "#facc15", fillOpacity: 1, pane: "markerPane"
         }).addTo(map);
         marker.bindPopup(() => sharedPopupHtml(id));
@@ -467,15 +494,95 @@
         sharedAccuracyCircles.delete(id);
       }
       styleSharedMarker(id);
+      tryInitialMapFit();
     }
 
-    function markSharedTrackerOffline(trackerId, reason = "removed") {
-      const state = sharedStates.get(trackerId);
-      if (state) {
-        state.live = false;
+    function markSharedTrackerOffline(trackerId, reason = "removed", lastKnownState = null, shouldLog = true) {
+      const current = sharedStates.get(trackerId);
+      if (lastKnownState && lastKnownState.location) {
+        const incomingUpdatedAt = Number(lastKnownState.updatedAt) || 0;
+        const currentUpdatedAt = Number(current?.updatedAt) || 0;
+        if (current && currentUpdatedAt > incomingUpdatedAt) {
+          // The current browser has a more recent location than this snapshot; keep that location but mark it offline.
+          current.live = false;
+          styleSharedMarker(trackerId);
+        } else {
+          renderSharedTrackerState({ ...lastKnownState, live: false });
+        }
+      } else if (current) {
+        current.live = false;
         styleSharedMarker(trackerId);
       }
-      log(`Tracker not live any more: ${trackerId} (${reason}). Showing its last known position.`);
+      if (shouldLog) log(`Tracker not live any more: ${trackerId} (${reason}). Showing its last known position.`);
+    }
+
+    function tryInitialMapFit() {
+      if (initialMapFitDone || !initialSharedSyncComplete || !myPosition || userMovedMap) return;
+      const points = [myPosition];
+      for (const state of sharedStates.values()) {
+        if (state.location && Number.isFinite(Number(state.location.lat)) && Number.isFinite(Number(state.location.lng))) {
+          points.push([Number(state.location.lat), Number(state.location.lng)]);
+        }
+      }
+      // If no shared tracker has been found yet, center on this device but keep fitting enabled.
+      programmaticMapMove = true;
+      if (points.length > 1) {
+        map.fitBounds(L.latLngBounds(points), { padding: [36, 36], maxZoom: 15 });
+        initialMapFitDone = true;
+      } else {
+        map.setView(myPosition, Math.max(map.getZoom(), 15));
+      }
+      map.once("moveend", () => { programmaticMapMove = false; });
+      setTimeout(() => { programmaticMapMove = false; }, 1000);
+    }
+
+    async function refreshSharedStateFromApi() {
+      try {
+        const query = accessToken ? `?token=${encodeURIComponent(accessToken)}` : "";
+        const response = await fetch(`/api/state${query}`, {
+          method: "GET",
+          cache: "no-store",
+          credentials: "same-origin",
+          headers: { "Accept": "application/json" }
+        });
+        if (!response.ok) {
+          if (response.status === 401 && !statePollAuthWarningShown) {
+            statePollAuthWarningShown = true;
+            log("Shared state HTTP sync was rejected (access code mismatch or missing). This browser needs the same access code as the backend.");
+          }
+          return;
+        }
+        const snapshot = await response.json();
+        if (Number.isFinite(snapshot.serverTime)) serverOffsetMs = snapshot.serverTime - Date.now();
+        const lastKnownStates = Array.isArray(snapshot.lastKnown) ? snapshot.lastKnown : [];
+        const liveStates = Array.isArray(snapshot.trackers) ? snapshot.trackers : [];
+        const lastKnownById = new Map(lastKnownStates.map(state => [state.trackerId, state]));
+        const liveIds = new Set(liveStates.map(state => state.trackerId));
+
+        for (const state of lastKnownStates) renderSharedTrackerState({ ...state, live: false });
+        for (const state of liveStates) renderSharedTrackerState({ ...state, live: true });
+
+        // Retain a marker this browser has already seen even if a later snapshot no longer includes it.
+        for (const trackerId of sharedStates.keys()) {
+          if (liveIds.has(trackerId)) continue;
+          const lastKnownState = lastKnownById.get(trackerId);
+          if (lastKnownState) {
+            markSharedTrackerOffline(trackerId, "not in live snapshot", lastKnownState, false);
+          } else {
+            markSharedTrackerOffline(trackerId, "not in live snapshot", null, false);
+          }
+        }
+        initialSharedSyncComplete = true;
+        tryInitialMapFit();
+      } catch (_) {
+        // WebSocket remains the primary live channel; polling is a best-effort recovery path.
+      }
+    }
+
+    function startSharedStatePolling() {
+      if (sharedStatePollTimer) return;
+      refreshSharedStateFromApi();
+      sharedStatePollTimer = setInterval(refreshSharedStateFromApi, 10000);
     }
 
     function handleSharedBackendMessage(message) {
@@ -491,6 +598,8 @@
         if (Number.isFinite(message.serverTime)) serverOffsetMs = message.serverTime - Date.now();
         for (const state of message.lastKnown || []) renderSharedTrackerState({ ...state, live: false });
         for (const state of message.trackers || []) renderSharedTrackerState({ ...state, live: true });
+        initialSharedSyncComplete = true;
+        tryInitialMapFit();
         setBackendPill("connected", "ok");
         return;
       }
@@ -501,7 +610,7 @@
       }
 
       if (message.type === "trackerRemoved") {
-        markSharedTrackerOffline(message.trackerId, message.reason || "removed");
+        markSharedTrackerOffline(message.trackerId, message.reason || "removed", message.lastKnown || null);
         return;
       }
 
@@ -789,7 +898,7 @@
       $("accuracy").textContent = `${Math.round(accuracy)} m`;
       if (firstFix) {
         firstFix = false;
-        map.setView(myPosition, Math.max(map.getZoom(), 15));
+        tryInitialMapFit();
       }
       updateTrackerMarker();
     }
@@ -1112,6 +1221,7 @@
 
     log(`Required name of tracker: ${TRACKER_NAME}`);
     connectSharedBackend();
+    startSharedStatePolling();
     startSharedReportTimer();
 
     window.addEventListener("beforeunload", () => {
