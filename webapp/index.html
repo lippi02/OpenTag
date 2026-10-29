@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>OpenTag</title>
+  <title>OpenTag – BLE Tracker (Phase 2)</title>
   <link
     rel="stylesheet"
     href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
@@ -236,9 +236,13 @@
     .auth-panel .auth-error { color: #ff8c82; min-height: 1.4em; font-size: 13px; }
     .auth-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; }
     .auth-actions button { flex: 1 1 160px; }
-    .account-bar { display:flex; justify-content:space-between; align-items:center; gap:12px; margin: 0 0 12px; padding: 10px 12px; border:1px solid var(--border); border-radius:12px; background:var(--panel); }
-    .account-bar span { color: var(--muted); font-size: 13px; }
+    .account-bar { display:flex; justify-content:space-between; align-items:center; gap:12px; margin: 0 0 0 auto; padding: 7px 9px; border:1px solid var(--border); border-radius:12px; background:var(--panel); flex: 0 0 auto; white-space: nowrap; }
+    .account-bar span { color: var(--muted); font-size: 13px; white-space: nowrap; }
     .account-bar strong { color: var(--text); }
+    .account-bar button { padding: 8px 11px; }
+    @media (max-width: 760px) {
+      .account-bar { margin-left: auto; }
+    }
     @media (max-width: 900px) {
       .grid { grid-template-columns: 1fr; }
       #map { min-height: 460px; height: 60vh; }
@@ -270,11 +274,6 @@
     </section>
 
     <div id="trackerApp" hidden>
-    <div class="account-bar">
-      <span>Signed in as <strong id="currentUsername">–</strong></span>
-      <button id="logoutBtn" class="secondary" type="button">Sign out</button>
-    </div>
-
     <div class="toolbar">
       <button id="connectBtn" class="primary">Search Tracker</button>
       <button id="disconnectBtn" class="secondary" disabled>Stop Tracking</button>
@@ -285,6 +284,10 @@
           <span class="slider"></span>
         </span>
       </label>
+      <div class="account-bar">
+        <span>Signed in as <strong id="currentUsername">–</strong></span>
+        <button id="logoutBtn" class="secondary" type="button">Sign out</button>
+      </div>
     </div>
 
     <div class="grid">
@@ -304,15 +307,15 @@
           <div class="metric"><div class="label">Estimated Distance</div><div class="value" id="distance">–</div></div>
           <div class="metric"><div class="label">Transmission Power</div><div class="value" id="txPower">–</div></div>
           <div class="metric"><div class="label">Last BLE Packet</div><div class="value" id="lastSeen">–</div></div>
-          <div class="metric"><div class="label">Own GPS Accuracy</div><div class="value" id="accuracy">–</div></div>
+          <div class="metric" title="GPS accuracy reported by the device that most recently supplied this tracker's location."><div class="label">Reporter GPS Accuracy</div><div class="value" id="accuracy">–</div></div>
           <div class="metric"><div class="label">Tracker mode</div><div class="value" id="trackerMode">–</div></div>
         </div>
 
         <div class="map-legend">
           <span class="pill">🔵 Own Position</span>
-          <span class="pill">🟡 Tracker online: Current Position</span>
-          <span class="pill">🟠 Tracker offline: Last Position</span>
-          <span class="pill" id="backendPill">⚪ Shared backend: connecting…</span>
+		  <span class="pill">🟡 Tracker online: Current Position</span>
+		  <span class="pill">🟠 Tracker offline: Last Position</span>
+		  <span class="pill" id="backendPill">⚪ Shared backend: connecting…</span>
         </div>
 
         <div id="log" class="log"></div>
@@ -366,8 +369,6 @@
     let programmaticMapMove = false;
     let userMovedMap = false;
 
-    // The old shared access token is no longer used. Remove it from any legacy URL
-    // so it is not left visible in the address bar or copied into a link.
     (function cleanLegacyTokenFromUrl() {
       const params = new URLSearchParams(location.search);
       if (!params.has("token")) return;
@@ -411,7 +412,6 @@
 
     function backendWebSocketUrl() {
       const protocol = location.protocol === "https:" ? "wss:" : "ws:";
-      // Same-origin HttpOnly session cookie is sent automatically during the WS handshake.
       return `${protocol}//${location.host}/ws/`;
     }
 
@@ -423,8 +423,8 @@
     }
 
     const sharedStates = new Map();
-    let serverOffsetMs = 0; // server clock minus local clock, so "age" is right even if the phone clock is off
-    const serverNow = () => Date.now() + serverOffsetMs;
+    let serverOffsetMs = 0;
+	const serverNow = () => Date.now() + serverOffsetMs;
 
     function escapeHtml(value) {
       return String(value ?? "").replace(/[&<>"']/g, (c) => (
@@ -444,6 +444,16 @@
 
     function sharedStateIsLive(state) {
       return state.live !== false && serverNow() - (state.updatedAt || 0) <= SHARED_STALE_MS;
+    }
+
+    function updateReporterAccuracyReadout() {
+      const candidates = [...sharedStates.values()]
+        .filter(state => state && state.location && state.location.accuracy !== null && state.location.accuracy !== undefined)
+        .map(state => ({ state, accuracy: Number(state.location.accuracy), updatedAt: Number(state.updatedAt) || 0 }))
+        .filter(item => Number.isFinite(item.accuracy) && item.accuracy >= 0)
+        .sort((a, b) => b.updatedAt - a.updatedAt);
+      const latest = candidates[0];
+      $("accuracy").textContent = latest ? `${Math.round(latest.accuracy)} m` : "–";
     }
 
     function sharedPopupHtml(trackerId) {
@@ -471,7 +481,6 @@
       const marker = sharedMarkers.get(trackerId);
       if (!state || !marker) return;
       const live = sharedStateIsLive(state);
-      // Live reports are yellow; retained/offline positions are visibly orange, never faded to grey.
       marker.setStyle({
         color: live ? "#854d0e" : "#9a3412",
         fillColor: live ? "#facc15" : "#f97316",
@@ -495,10 +504,10 @@
       const existing = sharedStates.get(id);
       const incomingUpdatedAt = Number(state.updatedAt) || 0;
       const existingUpdatedAt = Number(existing?.updatedAt) || 0;
-      // Ignore a delayed HTTP snapshot if this browser already has a newer report.
       if (existing && incomingUpdatedAt < existingUpdatedAt) return;
 
       sharedStates.set(id, state);
+      updateReporterAccuracyReadout();
       const latLng = [state.location.lat, state.location.lng];
 
       let marker = sharedMarkers.get(id);
@@ -539,15 +548,16 @@
         const incomingUpdatedAt = Number(lastKnownState.updatedAt) || 0;
         const currentUpdatedAt = Number(current?.updatedAt) || 0;
         if (current && currentUpdatedAt > incomingUpdatedAt) {
-          // The current browser has a more recent location than this snapshot; keep that location but mark it offline.
           current.live = false;
           styleSharedMarker(trackerId);
+          updateReporterAccuracyReadout();
         } else {
           renderSharedTrackerState({ ...lastKnownState, live: false });
         }
       } else if (current) {
         current.live = false;
         styleSharedMarker(trackerId);
+        updateReporterAccuracyReadout();
       }
       if (shouldLog) log(`Tracker not live any more: ${trackerId} (${reason}). Showing its last known position.`);
     }
@@ -560,7 +570,6 @@
           points.push([Number(state.location.lat), Number(state.location.lng)]);
         }
       }
-      // If no shared tracker has been found yet, center on this device but keep fitting enabled.
       programmaticMapMove = true;
       if (points.length > 1) {
         map.fitBounds(L.latLngBounds(points), { padding: [36, 36], maxZoom: 15 });
@@ -597,7 +606,6 @@
         for (const state of lastKnownStates) renderSharedTrackerState({ ...state, live: false });
         for (const state of liveStates) renderSharedTrackerState({ ...state, live: true });
 
-        // Retain a marker this browser has already seen even if a later snapshot no longer includes it.
         for (const trackerId of sharedStates.keys()) {
           if (liveIds.has(trackerId)) continue;
           const lastKnownState = lastKnownById.get(trackerId);
@@ -610,7 +618,6 @@
         initialSharedSyncComplete = true;
         tryInitialMapFit();
       } catch (_) {
-        // WebSocket remains the primary live channel; polling is a best-effort recovery path.
       }
     }
 
@@ -931,7 +938,6 @@
         accuracyCircle.setRadius(accuracy);
       }
 
-      $("accuracy").textContent = `${Math.round(accuracy)} m`;
       if (firstFix) {
         firstFix = false;
         tryInitialMapFit();
@@ -1299,7 +1305,6 @@
       $("authPanel").hidden = true;
       $("trackerApp").hidden = false;
       $("authError").textContent = "";
-      // Leaflet was initialized while the app panel was hidden; recalculate its size after showing it.
       setTimeout(() => { try { map.invalidateSize({ pan: false }); } catch (_) {} }, 100);
       if (appStarted) return;
       appStarted = true;
