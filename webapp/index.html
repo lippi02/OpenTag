@@ -651,7 +651,7 @@ loadUsers();
 loadLastKnown();
 
 server.listen(PORT, HOST, () => {
-  console.log(`OpenTag Phase 2 backend listening on http://${HOST}:${PORT}`);
+  console.log(`OpenTag backend listening on http://${HOST}:${PORT}`);
   console.log(`WebSocket endpoint: ${WS_PATH}`);
   console.log(`Tracker state TTL: ${TRACKER_TTL_MS} ms`);
   console.log(`Account registration: ${REGISTRATION_ENABLED ? 'enabled' : 'disabled'}`);
