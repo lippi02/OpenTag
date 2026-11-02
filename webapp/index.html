@@ -636,7 +636,7 @@
           <label class="switch"><input id="modeToggle" type="checkbox" disabled><span class="switch-track"></span></label>
         </div>
         <div class="header-spacer"></div>
-        <div class="account-bar"><span>Signed in as <strong id="currentUsername">–</strong></span><button id="logoutBtn" class="ghost" type="button">Sign out</button></div>
+        <div class="account-bar"><span>Signed in as <strong id="currentUsername">-</strong></span><button id="logoutBtn" class="ghost" type="button">Sign out</button></div>
         <div id="trackerMenu" class="tracker-menu" hidden>
           <div class="menu-heading"><h2>My Trackers</h2><button id="addTrackerBtn" class="primary" type="button">+ Add tracker</button></div>
           <div id="trackerList" class="tracker-list"><div class="menu-empty">Loading trackers…</div></div>
@@ -650,12 +650,12 @@
           <div class="status"><span id="statusDot" class="status-dot"></span><div><strong id="statusText">No tracker selected</strong><div id="statusSub" class="status-sub">Add a tracker to your account.</div></div></div>
           <h2 id="selectedTrackerTitle">Tracker data</h2>
           <div class="metric-grid">
-            <div class="metric"><div class="metric-label">Name</div><div id="deviceName" class="metric-value">–</div></div>
-            <div class="metric"><div class="metric-label">GPS Distance</div><div id="gpsDistance" class="metric-value">–</div></div>
-            <div class="metric"><div class="metric-label">Estimated Distance</div><div id="distance" class="metric-value">–</div></div>
-            <div class="metric"><div class="metric-label">Transmission Power</div><div id="txPower" class="metric-value">–</div></div>
-            <div class="metric"><div class="metric-label">Last BLE Packet</div><div id="lastSeen" class="metric-value">–</div></div>
-            <div class="metric" title="GPS accuracy reported by the device that most recently supplied this tracker's location."><div class="metric-label">Reporter GPS Accuracy</div><div id="accuracy" class="metric-value">–</div></div>
+            <div class="metric"><div class="metric-label">Name</div><div id="deviceName" class="metric-value">-</div></div>
+            <div class="metric"><div class="metric-label">GPS Distance</div><div id="gpsDistance" class="metric-value">-</div></div>
+            <div class="metric"><div class="metric-label">Estimated Distance</div><div id="distance" class="metric-value">-</div></div>
+            <div class="metric"><div class="metric-label">Transmission Power</div><div id="txPower" class="metric-value">-</div></div>
+            <div class="metric"><div class="metric-label">Last BLE Packet</div><div id="lastSeen" class="metric-value">-</div></div>
+            <div class="metric" title="GPS accuracy reported by the device that most recently supplied this tracker's location."><div class="metric-label">Reporter GPS Accuracy</div><div id="accuracy" class="metric-value">-</div></div>
           </div>
           <div class="legend"><span class="pill">🔵 Own position</span><span class="pill" id="trackerPill">🟠 Tracker: offline</span><span class="pill" id="backendLegend">⚪ Shared backend</span></div>
           <div id="log" class="log"></div>
@@ -681,19 +681,24 @@
     map.createPane(TRACKER_MARKER_PANE);
     map.getPane(TRACKER_MARKER_PANE).style.zIndex = '640';
     map.getPane(TRACKER_MARKER_PANE).style.pointerEvents = 'auto';
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
       maxZoom: 19,
-      attribution: '&copy; OpenStreetMap közreműködők'
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
     }).addTo(map);
 
-    let authenticated = false, currentUser = null, authMode = 'login';
+    let authenticated = false, authMode = 'login';
     let sharedSocket = null, reconnectTimer = null, reconnectDelay = 1000, reconnectEverOpened = false;
     let statePollTimer = null, reportTimer = null;
     let myPosition = null, myAccuracy = null, locationWatchId = null, myMarker = null, myAccuracyCircle = null;
     let activeDevice = null, activeTracker = null, activeListener = null, activeAbortController = null;
-    let activeTracking = false, receiving = false, lastAdvertisementAt = 0, lastReportSentAt = 0, lastTxPower = null, lastRssi = null, rssiSamples = [], modeValue = null;
+    let activeTracking = false, receiving = false, lastAdvertisementAt = 0, lastReportSentAt = 0, lastTxPower = null, lastRssi = null, rssiSamples = [];
     let selectedTrackerId = null, firstMapFitDone = false, initialStateSynced = false, userMovedMap = false, programmaticMapMove = false;
     let ownedTrackers = [], serverOffsetMs = 0;
+    let modeBusy = false, watchStartedAt = 0, recoveryTimer = null, lastUiUpdate = 0, lastListHtml = '', listPointerDown = false;
+    let lastLocationError = '', backendOutdated = false, lastNormRssi = null, lastBackendError = '', lastBackendErrorAt = 0;
+    const markerOnlineCache = new Map(), popupCache = new Map();
+    const lastShownTx = new Map();
+    const CAL_TX_POWER = 4, LOST_TX_POWER = 8, UI_THROTTLE_MS = 250, STALE_MS = 6000, MAX_LOG_LINES = 300;
     const sharedStates = new Map(), markers = new Map(), accuracyCircles = new Map();
     const BLE_DEVICE_MAP_KEY = 'opentag.v2.bleDeviceMap';
     const LAST_SELECTED_KEY = 'opentag.v2.lastSelectedTracker';
@@ -714,7 +719,10 @@
     function log(message) {
       const el = $('log');
       if (!el) return;
-      el.textContent += `[${new Date().toLocaleTimeString('hu-HU')}] ${message}\n`;
+      const line = document.createElement('div');
+      line.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+      el.appendChild(line);
+      while (el.childElementCount > MAX_LOG_LINES) el.firstElementChild.remove();
       el.scrollTop = el.scrollHeight;
     }
     function escapeHtml(value) {
@@ -730,7 +738,7 @@
       return Date.now() + serverOffsetMs;
     }
     function formatDistance(m) {
-      if (!Number.isFinite(m)) return '–';
+      if (!Number.isFinite(m)) return '-';
       if (m < 1000) return `${Math.round(m)} m`;
       return `${(m / 1000).toFixed(m < 10000 ? 1 : 0)} km`;
     }
@@ -743,9 +751,9 @@
       return 6371000 * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
     }
     function formatAge(ms) {
-      if (!Number.isFinite(ms) || ms < 0) return '–';
-      const sec = Math.floor(ms / 1000);
-      if (sec < 60) return `${sec}s ago`;
+      if (!Number.isFinite(ms) || ms < -10000) return '-';
+      const sec = Math.floor(Math.max(0, ms) / 1000);
+      if (sec < 60) return 'just now';
       const min = Math.floor(sec / 60);
       if (min < 60) return `${min} min ago`;
       const h = Math.floor(min / 60);
@@ -765,8 +773,8 @@
       return selectedTrackerId ? getState(selectedTrackerId) : null;
     }
     function setBackendState(text, online) {
-      const value = `${online ? '🟢' : '⚪'} Shared backend: ${text}`;
-      $('backendLegend').textContent = value;
+      if (backendOutdated && text === 'connected') { text = 'connected, but OUTDATED - restart the backend app'; online = false; }
+      $('backendLegend').textContent = `${online ? '🟢' : backendOutdated ? '🔴' : '⚪'} Shared backend: ${text}`;
     }
     function setStatus(text, sub = '', online = false) {
       $('statusText').textContent = text;
@@ -778,23 +786,28 @@
       return myPosition && state?.location ? haversine(myPosition, [state.location.lat, state.location.lng]) : NaN;
     }
     function estimatedDistanceForState(trackerId, state) {
-      if (activeTracking && receiving && activeTracker?.trackerId === trackerId && Number.isFinite(lastRssi)) return estimateBleDistance(lastRssi);
+      if (activeTracking && receiving && activeTracker?.trackerId === trackerId && Number.isFinite(lastNormRssi)) return estimateBleDistance(lastNormRssi);
       const saved = state?.distanceM;
       if (saved !== null && saved !== undefined && Number.isFinite(Number(saved))) return Number(saved);
       const savedRssi = state?.rssi;
-      if (savedRssi !== null && savedRssi !== undefined && Number.isFinite(Number(savedRssi))) return estimateBleDistance(Number(savedRssi));
+      if (savedRssi !== null && savedRssi !== undefined && Number.isFinite(Number(savedRssi))) {
+        const tx = state?.txPower;
+        return estimateBleDistance(normalizeRssi(Number(savedRssi), tx !== null && tx !== undefined ? Number(tx) : NaN));
+      }
       return NaN;
     }
     function popupHtml(state) {
       const online = isOnline(state), dist = distanceForState(state.trackerId, state);
       const mode = state.trackerMode === 'lost' ? 'Lost' : state.trackerMode === 'normal' ? 'Normal' : 'Unknown';
       const gps = Number(state.location?.accuracy);
-      return `<strong>${escapeHtml(state.trackerName || 'OpenTag')}</strong><br>${online ? '🟡 Online' : '🟠 Offline'} · ${mode}<br>Distance from you: ${formatDistance(dist)}<br>Last report: ${formatAge(serverNow() - Number(state.updatedAt || 0))}<br>Reporter GPS accuracy: ${Number.isFinite(gps) ? `${Math.round(gps)} m` : '–'}`;
+      return `<strong>${escapeHtml(state.trackerName || 'OpenTag')}</strong><br>${online ? '🟡 Online' : '🟠 Offline'} · ${mode}<br>Distance from you: ${formatDistance(dist)}<br>Last report: ${formatAge(serverNow() - Number(state.updatedAt || 0))}<br>Reporter GPS accuracy: ${Number.isFinite(gps) ? `${Math.round(gps)} m` : '-'}`;
     }
     function updateMarkerStyle(trackerId) {
       const state = getState(trackerId), marker = markers.get(trackerId);
       if (!state || !marker) return;
       const online = isOnline(state);
+      if (markerOnlineCache.get(trackerId) === online) return;
+      markerOnlineCache.set(trackerId, online);
       marker.setStyle({
         color: online ? '#854d0e' : '#9a3412',
         fillColor: online ? '#facc15' : '#f97316',
@@ -829,6 +842,7 @@
           }).addTo(map);
           marker.bindPopup(() => popupHtml(getState(state.trackerId) || state));
           markers.set(state.trackerId, marker);
+          markerOnlineCache.delete(state.trackerId);
         } else marker.setLatLng(latlng);
         const accuracy = Number(state.location.accuracy);
         let circle = accuracyCircles.get(state.trackerId);
@@ -842,6 +856,7 @@
               weight: 1
             }).addTo(map);
             accuracyCircles.set(state.trackerId, circle);
+            markerOnlineCache.delete(state.trackerId);
           }
           else {
             circle.setLatLng(latlng);
@@ -851,7 +866,7 @@
           map.removeLayer(circle);
           accuracyCircles.delete(state.trackerId);
         }
-        marker.setPopupContent(popupHtml(state));
+        refreshPopup(state.trackerId);
         updateMarkerStyle(state.trackerId);
       }
       renderTrackerList();
@@ -881,12 +896,12 @@
     function updateDashboard() {
       const record = currentSelectedRecord(), state = currentSelectedState();
       if (!record) {
-        $('deviceName').textContent = '–';
-        $('gpsDistance').textContent = '–';
-        $('distance').textContent = '–';
-        $('txPower').textContent = '–';
-        $('lastSeen').textContent = '–';
-        $('accuracy').textContent = '–';
+        $('deviceName').textContent = '-';
+        $('gpsDistance').textContent = '-';
+        $('distance').textContent = '-';
+        $('txPower').textContent = '-';
+        $('lastSeen').textContent = '-';
+        $('accuracy').textContent = '-';
         $('trackerPill').textContent = '🟠 Tracker: offline';
         $('modeLabel').textContent = 'Mode unknown';
         $('modeToggle').checked = false;
@@ -898,28 +913,30 @@
       const gpsDistance = distanceForState(record.trackerId, state);
       const estimatedDistance = estimatedDistanceForState(record.trackerId, state);
       $('deviceName').textContent = record.name;
-      $('gpsDistance').textContent = Number.isFinite(gpsDistance) ? formatDistance(gpsDistance) : '–';
-      $('distance').textContent = Number.isFinite(estimatedDistance) ? formatDistance(estimatedDistance) : '–';
-      const txPower = state?.txPower;
-      $('txPower').textContent = txPower !== null && txPower !== undefined && Number.isFinite(Number(txPower)) ? `${Number(txPower)} dBm` : '–';
-      $('lastSeen').textContent = Number(state?.lastBlePacketAt) > 0 ? new Date(Number(state.lastBlePacketAt)).toLocaleTimeString('hu-HU') : '–';
+      $('gpsDistance').textContent = Number.isFinite(gpsDistance) ? formatDistance(gpsDistance) : '-';
+      $('distance').textContent = Number.isFinite(estimatedDistance) ? formatDistance(estimatedDistance) : '-';
+      const rawTx = state?.txPower;
+      if (rawTx !== null && rawTx !== undefined && Number.isFinite(Number(rawTx))) lastShownTx.set(record.trackerId, Number(rawTx));
+      const shownTx = lastShownTx.get(record.trackerId);
+      $('txPower').textContent = shownTx !== undefined ? `${shownTx} dBm` : '-';
+      $('lastSeen').textContent = Number(state?.lastBlePacketAt) > 0 ? new Date(Number(state.lastBlePacketAt)).toLocaleTimeString() : '-';
       const gps = Number(state?.location?.accuracy);
-      $('accuracy').textContent = Number.isFinite(gps) ? `${Math.round(gps)} m` : '–';
+      $('accuracy').textContent = Number.isFinite(gps) ? `${Math.round(gps)} m` : '-';
       $('trackerPill').textContent = online ? '🟡 Tracker: online' : '🟠 Tracker: offline';
       const mode = state?.trackerMode === 'lost' ? 'Lost' : state?.trackerMode === 'normal' ? 'Normal' : 'Unknown';
       $('modeLabel').textContent = mode;
       $('modeToggle').checked = state?.trackerMode === 'lost';
-      $('modeToggle').disabled = !(activeTracking && activeTracker?.trackerId === record.trackerId);
-      setStatus(`${record.name} · ${online ? 'Online' : 'Offline'}`, online ? `Last BLE report ${formatAge(serverNow() - Number(state?.updatedAt || 0))}.` : 'Showing the last known position, if available.', online);
+      $('modeToggle').disabled = modeBusy || !(activeTracking && activeTracker?.trackerId === record.trackerId);
+      setStatus(`${record.name} · ${online ? 'Online' : 'Offline'}`, online ? 'Receiving BLE advertising packets.' : 'Showing the last known position, if available.', online);
     }
     function renderTrackerList() {
       const list = $('trackerList');
-      if (!list) return;
+      if (!list || $('trackerMenu').hidden || listPointerDown) return;
       if (!ownedTrackers.length) {
-        list.innerHTML = '<div class="menu-empty">No trackers yet. Choose “Add tracker” to pair your first OpenTag.</div>';
+        setListHtml('<div class="menu-empty">No trackers yet. Choose “Add tracker” to pair your first OpenTag.</div>');
         return;
       }
-      list.innerHTML = ownedTrackers.map(record => {
+      const html = ownedTrackers.map(record => {
         const state = getState(record.trackerId), online = isOnline(state), selected = record.trackerId === selectedTrackerId;
         const mode = state?.trackerMode === 'lost' ? 'Lost' : state?.trackerMode === 'normal' ? 'Normal' : 'Mode unknown';
         const gpsDistance = distanceForState(record.trackerId, state);
@@ -931,10 +948,7 @@
           <div class="tracker-row-actions"><button type="button" data-connect="${escapeHtml(record.trackerId)}">${connectText}</button><button type="button" class="ghost" title="Rename" data-rename="${escapeHtml(record.trackerId)}">✎</button><button type="button" class="ghost" title="Remove tracker" data-remove="${escapeHtml(record.trackerId)}">×</button></div>
         </div>`;
       }).join('');
-      list.querySelectorAll('[data-select]').forEach(btn => btn.addEventListener('click', () => selectTracker(btn.dataset.select, true)));
-      list.querySelectorAll('[data-connect]').forEach(btn => btn.addEventListener('click', () => connectOrDisconnect(btn.dataset.connect)));
-      list.querySelectorAll('[data-rename]').forEach(btn => btn.addEventListener('click', () => renameTracker(btn.dataset.rename)));
-      list.querySelectorAll('[data-remove]').forEach(btn => btn.addEventListener('click', () => removeTracker(btn.dataset.remove)));
+      setListHtml(html);
     }
     function focusTracker(trackerId) {
       const state = getState(trackerId), marker = markers.get(trackerId);
@@ -971,9 +985,9 @@
       $('menuBtn').setAttribute('aria-expanded', 'false');
     }
     function tryInitialMapFit() {
-      if (firstMapFitDone || !initialStateSynced || !myPosition) return;
+      if (firstMapFitDone || !initialStateSynced || !myPosition || userMovedMap) return;
       const points = [myPosition];
-      for (const state of sharedStates.values()) if (state.location) points.push([Number(state.location.lat), Number(state.location.lng)]);
+      for (const state of sharedStates.values()) if (state.location && Number.isFinite(Number(state.location.lat)) && Number.isFinite(Number(state.location.lng))) points.push([Number(state.location.lat), Number(state.location.lng)]);
       if (points.length > 1) {
         programmaticMapMove = true;
         map.fitBounds(L.latLngBounds(points), {
@@ -1011,7 +1025,7 @@
         weight: 2
       }).addTo(map);
       else myMarker.setLatLng(myPosition);
-      myMarker.bindPopup(`This device<br>GPS accuracy: ${Number.isFinite(myAccuracy) ? Math.round(myAccuracy) + ' m' : '–'}`);
+      if (!myMarker.getPopup()) myMarker.bindPopup(() => `This device<br>GPS accuracy: ${Number.isFinite(myAccuracy) ? Math.round(myAccuracy) + ' m' : '-'}`);
       if (!myAccuracyCircle) myAccuracyCircle = L.circle(myPosition, {
         radius: Math.max(1, myAccuracy || 1),
         color: '#2f81f7',
@@ -1029,7 +1043,7 @@
     }
     function startLocation() {
       if (locationWatchId !== null || !navigator.geolocation) return;
-      locationWatchId = navigator.geolocation.watchPosition(updateOwnMarker, error => log(`Location error: ${error.message}`), {
+      locationWatchId = navigator.geolocation.watchPosition(updateOwnMarker, logLocationError, {
         enableHighAccuracy: true,
         maximumAge: 5000,
         timeout: 15000
@@ -1044,21 +1058,23 @@
         ...options,
         headers: {
           ...(options.headers || {}),
-          ...(options.body ? {
-            'Content-Type': 'application/json'
-          } : {})
+          ...(options.body ? { 'Content-Type': 'application/json' } : {})
         }
       });
       let result = {};
-      try {
-        result = await response.json();
-      } catch (_) { }
-      if (!response.ok) throw new Error(result.error || `Request failed (${response.status})`);
+      try { result = await response.json(); } catch (_) { /* e.g. an HTML error page from the proxy */ }
+      if (!response.ok) {
+        const error = new Error(result.error || `Request failed (HTTP ${response.status})`);
+        error.status = response.status;
+        throw error;
+      }
       return result;
     }
     function updateOwnedTrackers(list) {
       if (!Array.isArray(list)) return;
       ownedTrackers = list;
+      const knownIds = new Set(list.map(t => t.trackerId));
+      for (const id of [...sharedStates.keys()]) if (!knownIds.has(id)) removeTrackerLayers(id);
       if (!selectedTrackerId || !ownedTrackers.some(t => t.trackerId === selectedTrackerId)) {
         let remembered = '';
         try {
@@ -1070,33 +1086,41 @@
       updateDashboard();
     }
     async function refreshSharedState() {
-      if (!authenticated) return;
+      if (!authenticated || document.hidden) return;
       try {
+        const requestStartedAt = Date.now();
         const snapshot = await apiJson('/api/state');
-        if (Number.isFinite(snapshot.serverTime)) serverOffsetMs = snapshot.serverTime - Date.now();
-        updateOwnedTrackers(snapshot.ownedTrackers || []);
+        const responseReceivedAt = Date.now();
+        if (!authenticated) return;
+        if (Number.isFinite(snapshot.serverTime)) {
+          const requestMidpoint = requestStartedAt + (responseReceivedAt - requestStartedAt) / 2;
+          serverOffsetMs = snapshot.serverTime - requestMidpoint;
+        }
+        if (Array.isArray(snapshot.ownedTrackers)) {
+          if (backendOutdated) { backendOutdated = false; setBackendState('connected', true); }
+          updateOwnedTrackers(snapshot.ownedTrackers);
+        } else {
+          flagOutdatedBackend();
+        }
         const known = Array.isArray(snapshot.lastKnown) ? snapshot.lastKnown : [];
         const live = Array.isArray(snapshot.trackers) ? snapshot.trackers : [];
+        const knownIds = new Set(known.map(s => s.trackerId));
         const liveIds = new Set(live.map(s => s.trackerId));
-        for (const s of known) renderState({
-          ...s,
-          live: false
-        });
-        for (const s of live) renderState({
-          ...s,
-          live: true
-        });
-        for (const [id, state] of sharedStates) if (!liveIds.has(id) && !known.some(s => s.trackerId === id)) markOffline(id);
+        for (const s of known) renderState({ ...s, live: false });
+        for (const s of live) renderState({ ...s, live: true });
+        
+        const ownId = activeTracking && receiving ? activeTracker?.trackerId : null;
+        for (const id of [...sharedStates.keys()]) if (!liveIds.has(id) && !knownIds.has(id) && id !== ownId) markOffline(id);
         initialStateSynced = true;
         tryInitialMapFit();
       } catch (error) {
-        if (error.message.includes('Authentication')) return showSignIn('Your session expired. Please sign in again.');
+        if (error.status === 401) showSignIn('Your session expired. Please sign in again.');
       }
     }
-    function startStatePolling() {
+    async function startStatePolling() {
       if (statePollTimer) clearInterval(statePollTimer);
-      refreshSharedState();
       statePollTimer = setInterval(refreshSharedState, 10000);
+      await refreshSharedState();
     }
     function backendWsUrl() {
       return `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws/`;
@@ -1105,7 +1129,8 @@
       if (!message || typeof message !== 'object') return;
       if (message.type === 'helloAck') {
         if (message.serverTime) serverOffsetMs = message.serverTime - Date.now();
-        if (message.appVersion) log(`Backend version ${message.appVersion}.`);
+        backendOutdated = !message.appVersion;
+        if (backendOutdated) flagOutdatedBackend(); else log(`Backend version ${message.appVersion}.`);
         return;
       }
       if (message.type === 'snapshot') {
@@ -1135,6 +1160,7 @@
       if (message.type === 'trackerRenamed') {
         const item = ownedTrackers.find(t => t.trackerId === message.trackerId);
         if (item) item.name = message.name;
+        if (activeTracker?.trackerId === message.trackerId) activeTracker.name = message.name;
         const state = getState(message.trackerId);
         if (state) state.trackerName = message.name;
         renderTrackerList();
@@ -1142,57 +1168,59 @@
         return;
       }
       if (message.type === 'trackerDeleted') {
+        if (activeTracker?.trackerId === message.trackerId) {
+          stopActiveTracking(false);
+          log('This tracker was removed from your account on another device. Stopped listening to it.');
+        }
         ownedTrackers = ownedTrackers.filter(t => t.trackerId !== message.trackerId);
-        sharedStates.delete(message.trackerId);
-        if (markers.has(message.trackerId)) {
-          map.removeLayer(markers.get(message.trackerId));
-          markers.delete(message.trackerId);
-        }
-        if (accuracyCircles.has(message.trackerId)) {
-          map.removeLayer(accuracyCircles.get(message.trackerId));
-          accuracyCircles.delete(message.trackerId);
-        }
+        delete bleDeviceMap[message.trackerId];
+        writeBleDeviceMap();
+        removeTrackerLayers(message.trackerId);
         if (selectedTrackerId === message.trackerId) selectedTrackerId = ownedTrackers[0]?.trackerId || null;
         renderTrackerList();
         updateDashboard();
         return;
       }
-      if (message.type === 'error') log(`Backend error: ${message.message || 'unknown error'}`);
+      if (message.type === 'error') {
+        const text = message.message || 'unknown error';
+        if (text !== lastBackendError || Date.now() - lastBackendErrorAt > 30000) log(`Backend error: ${text}`);
+        lastBackendError = text;
+        lastBackendErrorAt = Date.now();
+      }
+    }
+    function scheduleReconnect() {
+      if (!authenticated || reconnectTimer) return;
+      reconnectTimer = setTimeout(() => { reconnectTimer = null; connectBackend(); }, reconnectDelay);
+      reconnectDelay = Math.min(15000, reconnectDelay * 2);
     }
     function connectBackend() {
       if (!authenticated || (sharedSocket && [WebSocket.OPEN, WebSocket.CONNECTING].includes(sharedSocket.readyState))) return;
       setBackendState('connecting…', false);
       try {
-        sharedSocket = new WebSocket(backendWsUrl());
-        sharedSocket.addEventListener('open', () => {
+        const ws = new WebSocket(backendWsUrl());
+        sharedSocket = ws;
+        ws.addEventListener('open', () => {
+          if (sharedSocket !== ws) return;
           reconnectDelay = 1000;
           reconnectEverOpened = true;
           setBackendState('connected', true);
           log('Shared backend connected.');
-          sharedSocket.send(JSON.stringify({
-            type: 'hello',
-            appVersion: 'v2.0.3'
-          }));
+          ws.send(JSON.stringify({ type: 'hello', appVersion: 'v2' }));
         });
-        sharedSocket.addEventListener('message', event => {
-          try {
-            backendMessage(JSON.parse(event.data));
-          } catch (error) {
-            log(`Backend message error: ${error.message}`);
-          }
+        ws.addEventListener('message', event => {
+          if (sharedSocket !== ws) return;
+          try { backendMessage(JSON.parse(event.data)); } catch (error) { log(`Backend message error: ${error.message}`); }
         });
-        sharedSocket.addEventListener('close', () => {
+        ws.addEventListener('close', () => {
+          if (sharedSocket !== ws) return;
           setBackendState(reconnectEverOpened ? 'disconnected; retrying…' : 'cannot connect; retrying…', false);
-          if (authenticated) {
-            clearTimeout(reconnectTimer);
-            reconnectTimer = setTimeout(connectBackend, reconnectDelay);
-            reconnectDelay = Math.min(15000, reconnectDelay * 2);
-          }
+          scheduleReconnect();
         });
-        sharedSocket.addEventListener('error', () => setBackendState('connection error', false));
+        ws.addEventListener('error', () => { if (sharedSocket === ws) setBackendState('connection error', false); });
       } catch (error) {
         setBackendState('connection error', false);
         log(`WebSocket error: ${error.message}`);
+        scheduleReconnect();
       }
     }
     function sendWs(message) {
@@ -1207,9 +1235,15 @@
 
     async function readDeviceIdentity(device) {
       if (!device?.gatt) throw new Error('This Bluetooth device does not expose GATT.');
-      const server = await device.gatt.connect();
+      let server;
       try {
-        const service = await server.getPrimaryService(SERVICE_UUID);
+        server = await gattStep('connecting', device.gatt.connect(), 20000);
+      } catch (error) {
+        try { device.gatt.disconnect(); } catch (_) { }
+        throw error;
+      }
+      try {
+        const service = await gattStep('service search', server.getPrimaryService(SERVICE_UUID));
         let deviceId = '';
         try {
           const idChar = await service.getCharacteristic(TRACKER_ID_UUID);
@@ -1222,16 +1256,10 @@
           const value = (await modeChar.readValue()).getUint8(0);
           if (value === 0) mode = 'normal'; else if (value === 1) mode = 'lost';
         } catch (_) { }
-        if (!deviceId) deviceId = `browser-${String(device.id || '').replace(/[^a-zA-Z0-9.-]/g, '').slice(0, 96)}`;
-        return {
-          deviceId,
-          mode,
-          stable: !deviceId.startsWith('browser-')
-        };
+        if (!deviceId) deviceId = `browser-${String(device.id || '').replace(/[^a-zA-Z0-9.-]/g, '').slice(0, 90)}`;
+        return { deviceId, mode, stable: !deviceId.startsWith('browser-') };
       } finally {
-        try {
-          if (device.gatt.connected) device.gatt.disconnect();
-        } catch (_) { }
+        try { if (device.gatt.connected) device.gatt.disconnect(); } catch (_) { }
       }
     }
     async function addTracker() {
@@ -1265,8 +1293,9 @@
         await startListening(device, record, identity.mode);
       } catch (error) {
         if (error?.name !== 'NotFoundError') {
-          log(`Add tracker failed: ${error.message}`);
-          alert(error.message);
+          const text = describeApiError(error);
+          log(`Add tracker failed: ${text}`);
+          alert(text);
         }
       } finally {
         $('addTrackerBtn').disabled = false;
@@ -1329,8 +1358,9 @@
         await startListening(device, resolvedRecord, identity.mode);
       } catch (error) {
         if (error?.name !== 'NotFoundError') {
-          log(`Tracker connection failed: ${error.message}`);
-          alert(error.message);
+          const text = describeApiError(error);
+          log(`Tracker connection failed: ${text}`);
+          alert(text);
         }
       }
     }
@@ -1341,11 +1371,11 @@
           trackerId: record.trackerId,
           deviceId: record.deviceId,
           trackerName: record.name,
-          updatedAt: Date.now(),
+          updatedAt: serverNow(),
           live: false
         };
         state.trackerMode = initialMode;
-        state.updatedAt = Date.now();
+        state.updatedAt = serverNow();
         renderState(state);
       }
       activeDevice = device;
@@ -1354,9 +1384,7 @@
       receiving = false;
       lastAdvertisementAt = 0;
       lastReportSentAt = 0;
-      lastRssi = null;
-      lastTxPower = null;
-      rssiSamples = [];
+      resetSignalState();
       activeListener = onAdvertisement;
       activeAbortController = new AbortController();
       device.addEventListener('advertisementreceived', activeListener);
@@ -1364,6 +1392,7 @@
         await device.watchAdvertisements({
           signal: activeAbortController.signal
         });
+        watchStartedAt = Date.now();
         log(`Listening to ${record.name}.`);
         setStatus(`${record.name} selected`, 'Waiting for BLE advertising packets…', false);
         $('modeToggle').disabled = !initialMode && !getState(record.trackerId)?.trackerMode;
@@ -1376,7 +1405,6 @@
         setStatus('BLE listening failed', error.message, false);
         throw error;
       }
-      if (!reportTimer) reportTimer = setInterval(reportActiveTracker, 1000);
       renderTrackerList();
       updateDashboard();
     }
@@ -1385,6 +1413,10 @@
         type: 'trackerStop',
         deviceId: activeTracker.deviceId
       });
+      if (activeTracker) {
+        const st = getState(activeTracker.trackerId);
+        if (st) { st.live = false; updateMarkerStyle(st.trackerId); }
+      }
       try {
         activeAbortController?.abort();
       } catch (_) { }
@@ -1403,11 +1435,105 @@
       activeTracking = false;
       receiving = false;
       lastAdvertisementAt = 0;
-      lastRssi = null;
-      lastTxPower = null;
-      rssiSamples = [];
+      resetSignalState();
       renderTrackerList();
       updateDashboard();
+    }
+    async function gattStep(name, promise, ms = 10000) {
+      promise.catch(() => { });
+      let timer;
+      const timeout = new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(`Timeout: ${name}`)), ms); });
+      try { return await Promise.race([promise, timeout]); } finally { clearTimeout(timer); }
+    }
+    function describeApiError(error) {
+      if (error?.status === 404 && error.message === 'Not found') {
+        return 'The backend does not know this request (HTTP 404). It is most likely still running an older OpenTag version: update the backend files, restart the OpenTag backend app, then reload this page.';
+      }
+      return error?.message || 'Unknown error';
+    }
+    function flagOutdatedBackend() {
+      backendOutdated = true;
+      setBackendState('connected', true);
+      if (flagOutdatedBackend.warned) return;
+      flagOutdatedBackend.warned = true;
+      log('The backend did not report a version or a tracker list, so it is still running the old (v1) code. Update the backend files, restart the OpenTag backend app and reload this page.');
+    }
+    function logLocationError(error) {
+      if (error.message === lastLocationError) return;
+      lastLocationError = error.message;
+      log(`Location error: ${error.message}`);
+    }
+    function setListHtml(html) {
+      if (html === lastListHtml) return;
+      lastListHtml = html;
+      $('trackerList').innerHTML = html;
+    }
+    function refreshPopup(trackerId) {
+      const marker = markers.get(trackerId), state = getState(trackerId);
+      if (!marker || !state || !(marker.isPopupOpen && marker.isPopupOpen())) return;
+      const html = popupHtml(state);
+      if (popupCache.get(trackerId) === html) return;
+      popupCache.set(trackerId, html);
+      marker.setPopupContent(html);
+    }
+    function removeTrackerLayers(trackerId) {
+      popupCache.delete(trackerId);
+      sharedStates.delete(trackerId);
+      markerOnlineCache.delete(trackerId);
+      const marker = markers.get(trackerId);
+      if (marker) { map.removeLayer(marker); markers.delete(trackerId); }
+      const circle = accuracyCircles.get(trackerId);
+      if (circle) { map.removeLayer(circle); accuracyCircles.delete(trackerId); }
+    }
+    function resetSignalState() {
+      lastRssi = null;
+      lastNormRssi = null;
+      lastTxPower = null;
+      rssiSamples = [];
+    }
+    function normalizeRssi(rssi, tx) {
+      return Number.isFinite(tx) ? rssi - (tx - CAL_TX_POWER) : rssi;
+    }
+    function addRssiSample(rssi) {
+      const mode = getState(activeTracker?.trackerId)?.trackerMode;
+      const tx = Number.isFinite(lastTxPower) ? lastTxPower : (mode === 'lost' ? LOST_TX_POWER : CAL_TX_POWER);
+      const t = Date.now();
+      rssiSamples.push({ t, r: rssi, v: normalizeRssi(rssi, tx) });
+      while (rssiSamples.length > 25 || (rssiSamples.length && t - rssiSamples[0].t > RSSI_WINDOW_MS)) rssiSamples.shift();
+      lastRssi = median(rssiSamples.map(x => x.r));
+      lastNormRssi = median(rssiSamples.map(x => x.v));
+    }
+    function blePacketServerTime() {
+      return lastAdvertisementAt ? Math.round(serverNow() - (Date.now() - lastAdvertisementAt)) : null;
+    }
+    async function restartAdvertisementWatch() {
+      const dev = activeDevice;
+      if (!activeTracking || !dev || modeBusy || typeof dev.watchAdvertisements !== 'function') return false;
+      try { activeAbortController?.abort(); } catch (_) { }
+      const controller = new AbortController();
+      activeAbortController = controller;
+      try {
+        await dev.watchAdvertisements({ signal: controller.signal });
+        watchStartedAt = Date.now();
+        return activeAbortController === controller;
+      } catch (error) {
+        if (error?.name === 'AbortError' || activeAbortController !== controller) return false;
+        log(`BLE listener restart failed: ${error.message}`);
+        return false;
+      }
+    }
+    async function recoverAdvertisements() {
+      if (!activeTracking || modeBusy) return;
+      if (Date.now() - Math.max(lastAdvertisementAt, watchStartedAt) < STALE_MS) return;
+      await restartAdvertisementWatch();
+    }
+    function uiTick() {
+      reportActiveTracker();
+      if (document.hidden) return;
+      for (const id of sharedStates.keys()) updateMarkerStyle(id);
+      for (const id of markers.keys()) refreshPopup(id);
+      updateDashboard();
+      renderTrackerList();
     }
     function estimateBleDistance(rssi) {
       if (!Number.isFinite(rssi)) return NaN;
@@ -1419,129 +1545,110 @@
     }
     function onAdvertisement(event) {
       if (!activeTracking || !activeTracker) return;
-      lastAdvertisementAt = Date.now();
+      const nowMs = Date.now();
+      lastAdvertisementAt = nowMs;
+      if (typeof event.txPower === 'number' && Number.isFinite(event.txPower)) lastTxPower = event.txPower;
+      if (typeof event.rssi === 'number' && Number.isFinite(event.rssi)) addRssiSample(event.rssi);
+      const first = !receiving;
       receiving = true;
-      const rssi = Number(event.rssi);
-      if (Number.isFinite(rssi)) {
-        rssiSamples.push(rssi);
-        while (rssiSamples.length > 20) rssiSamples.shift();
-        lastRssi = median(rssiSamples);
-      }
-      if (Number.isFinite(Number(event.txPower))) lastTxPower = Number(event.txPower);
+      if (!first && nowMs - lastUiUpdate < UI_THROTTLE_MS) return;
+      lastUiUpdate = nowMs;
       const old = getState(activeTracker.trackerId) || {};
-      const state = {
+      const distance = estimateBleDistance(lastNormRssi);
+      renderState({
         ...old,
         trackerId: activeTracker.trackerId,
         deviceId: activeTracker.deviceId,
         trackerName: activeTracker.name,
-        location: myPosition ? {
-          lat: myPosition[0],
-          lng: myPosition[1],
-          accuracy: myAccuracy
-        } : (old.location || null),
+        location: myPosition ? { lat: myPosition[0], lng: myPosition[1], accuracy: Number.isFinite(myAccuracy) ? myAccuracy : null } : (old.location || null),
         rssi: Number.isFinite(lastRssi) ? lastRssi : null,
-        txPower: lastTxPower,
-        distanceM: estimateBleDistance(lastRssi),
-        lastBlePacketAt: lastAdvertisementAt,
-        updatedAt: Date.now(),
+        txPower: Number.isFinite(lastTxPower) ? lastTxPower : null,
+        distanceM: Number.isFinite(distance) ? distance : null,
+        lastBlePacketAt: blePacketServerTime(),
+        updatedAt: serverNow(),
         live: true
-      };
-      renderState(state);
+      });
       if (myPosition) reportActiveTracker();
     }
     function reportActiveTracker() {
-      if (!activeTracking || !activeTracker || !receiving || Date.now() - lastAdvertisementAt > TRACKER_TTL_MS || !myPosition) {
-        if (activeTracking && lastAdvertisementAt && Date.now() - lastAdvertisementAt > TRACKER_TTL_MS) {
+      if (!activeTracking || !activeTracker) return;
+      const age = Date.now() - lastAdvertisementAt;
+      if (!receiving || !lastAdvertisementAt || age > TRACKER_TTL_MS) {
+        if (lastAdvertisementAt && age > TRACKER_TTL_MS) {
           receiving = false;
-          const state = getState(activeTracker?.trackerId);
-          if (state) {
+          const state = getState(activeTracker.trackerId);
+          if (state && state.live !== false) {
             state.live = false;
             updateMarkerStyle(state.trackerId);
             updateDashboard();
             renderTrackerList();
           }
-          if (activeTracker && !activeTracker._stopSent) {
-            sendWs({
-              type: 'trackerStop',
-              deviceId: activeTracker.deviceId
-            });
+          if (!activeTracker._stopSent) {
+            sendWs({ type: 'trackerStop', deviceId: activeTracker.deviceId });
             activeTracker._stopSent = true;
           }
         }
         return;
       }
+      if (!myPosition) return;
       activeTracker._stopSent = false;
-      const state = getState(activeTracker.trackerId);
       if (Date.now() - lastReportSentAt < 900) return;
+      const distance = estimateBleDistance(lastNormRssi);
       const sent = sendWs({
         type: 'trackerReport',
         deviceId: activeTracker.deviceId,
-        location: {
-          lat: myPosition[0],
-          lng: myPosition[1],
-          accuracy: Number.isFinite(myAccuracy) ? myAccuracy : null
-        },
-        rssi: lastRssi,
-        txPower: lastTxPower,
-        distanceM: estimateBleDistance(lastRssi),
-        trackerMode: state?.trackerMode || null,
-        lastBlePacketAt: lastAdvertisementAt
+        location: { lat: myPosition[0], lng: myPosition[1], accuracy: Number.isFinite(myAccuracy) ? myAccuracy : null },
+        rssi: Number.isFinite(lastRssi) ? lastRssi : null,
+        txPower: Number.isFinite(lastTxPower) ? lastTxPower : null,
+        distanceM: Number.isFinite(distance) ? distance : null,
+        trackerMode: getState(activeTracker.trackerId)?.trackerMode || null,
+        lastBlePacketAt: blePacketServerTime()
       });
-      lastReportSentAt = Date.now();
+      if (sent) lastReportSentAt = Date.now();
     }
     async function setSelectedTrackerMode(mode) {
-      if (!activeTracking || !activeDevice || activeTracker?.trackerId !== selectedTrackerId) {
+      if (modeBusy || !activeTracking || !activeDevice || activeTracker?.trackerId !== selectedTrackerId) {
         updateDashboard();
         return;
       }
       const wanted = mode === 'lost' ? 1 : 0;
       const targetDevice = activeDevice;
-      const targetListener = activeListener;
+      const trackerId = activeTracker.trackerId;
+      modeBusy = true;
       $('modeToggle').disabled = true;
       try {
-        try {
-          activeAbortController?.abort();
-        } catch (_) { }
-        if (targetListener) targetDevice.removeEventListener('advertisementreceived', targetListener);
-        const server = await targetDevice.gatt.connect();
-        const service = await server.getPrimaryService(SERVICE_UUID);
-        const characteristic = await service.getCharacteristic(MODE_UUID);
-        await characteristic.writeValueWithResponse(new Uint8Array([wanted]));
+        try { activeAbortController?.abort(); } catch (_) { }
+        activeAbortController = null;
+        await new Promise(resolve => setTimeout(resolve, 400));
+        const server = await gattStep('connecting', targetDevice.gatt.connect(), 20000);
+        const service = await gattStep('service search', server.getPrimaryService(SERVICE_UUID), 20000);
+        const characteristic = await gattStep('characteristic search', service.getCharacteristic(MODE_UUID));
+        await gattStep('write', characteristic.writeValueWithResponse(new Uint8Array([wanted])));
         await new Promise(resolve => setTimeout(resolve, 100));
-        const actual = (await characteristic.readValue()).getUint8(0);
+        const actual = (await gattStep('readback', characteristic.readValue())).getUint8(0);
         if (actual !== wanted) throw new Error('Tracker did not confirm the requested mode.');
-        const state = {
-          ...(getState(selectedTrackerId) || {}),
-          trackerId: selectedTrackerId,
-          deviceId: activeTracker.deviceId,
-          trackerName: activeTracker.name,
+        resetSignalState();
+        renderState({
+          ...(getState(trackerId) || {}),
+          trackerId,
+          deviceId: activeTracker?.deviceId,
+          trackerName: activeTracker?.name,
           trackerMode: mode,
-          updatedAt: Date.now(),
+          updatedAt: serverNow(),
           live: receiving
-        };
-        renderState(state);
+        });
         log(`Tracker mode changed to ${mode.toUpperCase()}.`);
       } catch (error) {
         log(`Mode change failed: ${error.message}`);
         alert(`Could not change tracker mode: ${error.message}`);
       } finally {
-        try {
-          if (targetDevice.gatt?.connected) targetDevice.gatt.disconnect();
-        } catch (_) { }
-        if (activeTracking && activeDevice === targetDevice && targetListener) {
+        try { if (targetDevice.gatt?.connected) targetDevice.gatt.disconnect(); } catch (_) { }
+        modeBusy = false;
+        if (activeTracking && activeDevice === targetDevice) {
           await new Promise(resolve => setTimeout(resolve, 350));
-          activeAbortController = new AbortController();
-          targetDevice.addEventListener('advertisementreceived', targetListener);
-          try {
-            await targetDevice.watchAdvertisements({
-              signal: activeAbortController.signal
-            });
-          }
-          catch (error) {
-            log(`BLE listener restart after mode change failed: ${error.message}`);
-          }
+          await restartAdvertisementWatch();
         }
-        $('modeToggle').disabled = !(activeTracking && activeTracker?.trackerId === selectedTrackerId);
+        updateDashboard();
       }
     }
     async function renameTracker(trackerId) {
@@ -1580,15 +1687,7 @@
           })
         });
         ownedTrackers = ownedTrackers.filter(item => item.trackerId !== trackerId);
-        sharedStates.delete(trackerId);
-        if (markers.has(trackerId)) {
-          map.removeLayer(markers.get(trackerId));
-          markers.delete(trackerId);
-        }
-        if (accuracyCircles.has(trackerId)) {
-          map.removeLayer(accuracyCircles.get(trackerId));
-          accuracyCircles.delete(trackerId);
-        }
+        removeTrackerLayers(trackerId);
         delete bleDeviceMap[trackerId];
         writeBleDeviceMap();
         if (selectedTrackerId === trackerId) {
@@ -1615,7 +1714,6 @@
     }
     function showSignIn(message = '') {
       authenticated = false;
-      currentUser = null;
       $('trackerApp').hidden = true;
       $('authPanel').hidden = false;
       $('authError').textContent = message;
@@ -1627,6 +1725,12 @@
       statePollTimer = null;
       if (reportTimer) clearInterval(reportTimer);
       reportTimer = null;
+      if (recoveryTimer) clearInterval(recoveryTimer);
+      recoveryTimer = null;
+      markerOnlineCache.clear();
+      lastListHtml = '';
+      backendOutdated = false;
+      reconnectDelay = 1000;
       if (reconnectTimer) clearTimeout(reconnectTimer);
       reconnectTimer = null;
       try {
@@ -1646,19 +1750,17 @@
     }
     async function activateUser(user) {
       authenticated = true;
-      currentUser = user;
       $('currentUsername').textContent = user.username;
       $('authPanel').hidden = true;
       $('trackerApp').hidden = false;
       $('authError').textContent = '';
-      setTimeout(() => map.invalidateSize({
-        pan: false
-      }), 100);
+      setTimeout(() => map.invalidateSize({ pan: false }), 100);
       connectBackend();
       startLocation();
-      await refreshSharedState();
-      startStatePolling();
-      log(`Signed in as ${user.username}.`);
+      if (!reportTimer) reportTimer = setInterval(uiTick, 1000);
+      if (!recoveryTimer) recoveryTimer = setInterval(recoverAdvertisements, 3000);
+      await startStatePolling();
+	  log(`Signed in as ${user.username}.`);
       const chosen = currentSelectedRecord();
       if (chosen) restoreRememberedTracker(chosen);
     }
@@ -1689,14 +1791,26 @@
       const menu = $('trackerMenu');
       menu.hidden = !menu.hidden;
       $('menuBtn').setAttribute('aria-expanded', String(!menu.hidden));
+      if (!menu.hidden) renderTrackerList();
     });
     document.addEventListener('click', event => {
-      if (!$('trackerMenu').hidden && !event.target.closest('#trackerMenu') && !event.target.closest('#menuBtn')) {
+      const path = event.composedPath ? event.composedPath() : [];
+      if (!$('trackerMenu').hidden && !path.includes($('trackerMenu')) && !path.includes($('menuBtn'))) {
         $('trackerMenu').hidden = true;
         $('menuBtn').setAttribute('aria-expanded', 'false');
       }
     });
     $('addTrackerBtn').addEventListener('click', addTracker);
+    $('trackerList').addEventListener('click', event => {
+      const el = event.target.closest('[data-select],[data-connect],[data-rename],[data-remove]');
+      if (!el) return;
+      if (el.dataset.select) selectTracker(el.dataset.select, true);
+      else if (el.dataset.connect) connectOrDisconnect(el.dataset.connect);
+      else if (el.dataset.rename) renameTracker(el.dataset.rename);
+      else if (el.dataset.remove) removeTracker(el.dataset.remove);
+    });
+    $('trackerList').addEventListener('pointerdown', () => { listPointerDown = true; });
+    for (const type of ['pointerup', 'pointercancel']) document.addEventListener(type, () => { listPointerDown = false; });
     $('modeToggle').addEventListener('change', event => setSelectedTrackerMode(event.target.checked ? 'lost' : 'normal'));
     $('authSwitch').addEventListener('click', () => setAuthMode(authMode === 'login' ? 'register' : 'login'));
     $('authForm').addEventListener('submit', async event => {
@@ -1734,19 +1848,12 @@
       showSignIn('You have signed out.');
       setAuthMode('login');
     });
-    document.addEventListener('visibilitychange', async () => {
-      if (document.visibilityState !== 'visible' || !activeTracking || !activeDevice || !activeAbortController) return;
-      if (Date.now() - lastAdvertisementAt > 5000) {
-        try {
-          await activeDevice.watchAdvertisements({
-            signal: activeAbortController.signal
-          });
-        } catch (error) {
-          log(`BLE listener resume failed: ${error.message}`);
-        }
-      }
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState !== 'visible' || !authenticated) return;
+      recoverAdvertisements();
+      refreshSharedState();
     });
-    window.addEventListener('beforeunload', () => {
+    window.addEventListener('pagehide', () => {
       if (activeTracker) sendWs({
         type: 'trackerStop',
         deviceId: activeTracker.deviceId

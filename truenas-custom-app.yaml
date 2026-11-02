@@ -1,9 +1,11 @@
 # Expected backend files: /mnt/Cache/Apps/nginxpmplus/opentag/backend/server.js and package.json
+# After you replace those files you MUST restart this app, otherwise Node keeps running the old server.js.
 
 services:
   opentag-backend:
     image: node:22-alpine
     restart: unless-stopped
+    stop_grace_period: 10s
     working_dir: /app
     command: ["node", "server.js"]
     environment:

@@ -1,9 +1,12 @@
 {
   "name": "opentag-backend",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "private": true,
   "description": "OpenTag backend",
   "main": "server.js",
+  "engines": {
+    "node": ">=18"
+  },
   "scripts": {
     "start": "node server.js"
   }
