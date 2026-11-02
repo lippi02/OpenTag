@@ -23,10 +23,10 @@ const PASSWORD_MIN_LENGTH = 0;
 const SCRYPT_KEY_LENGTH = 64;
 const scryptAsync = require('node:util').promisify(crypto.scrypt);
 
-const users = new Map(); // userId -> { id, username, passwordSalt, passwordHash, createdAt }
-const sessions = new Map(); // sha256(session token) -> { userId, expiresAt }
-const trackerStates = new Map(); // user-scoped tracker ID -> live state
-const lastKnown = new Map(); // user-scoped tracker ID -> persisted last known state
+const users = new Map();
+const sessions = new Map();
+const trackerStates = new Map();
+const lastKnown = new Map();
 const clients = new Set();
 const authRateLimits = new Map();
 let saveTimer = null;
@@ -113,8 +113,6 @@ function createSession(user) {
   return token;
 }
 function getClientIp(request) {
-  // NPMplus is a reverse proxy, so use its forwarded client address for per-visitor limits.
-  // This is rate limiting only (not an authorization decision).
   const forwarded = String(request.headers['x-forwarded-for'] || '').split(',')[0].trim();
   return forwarded || request.socket.remoteAddress || 'unknown';
 }
@@ -232,7 +230,13 @@ function loadLastKnown() {
       const location = sanitizeLocation(item && item.location);
       const trackerId = clampText(item && item.trackerId, 140);
       if (!trackerId || !location) continue;
-      lastKnown.set(trackerId, { ...item, trackerId, location, live: false });
+      const savedState = { ...item };
+      const legacyMode = savedState.mode;
+      savedState.trackerMode = ['normal', 'lost'].includes(savedState.trackerMode)
+        ? savedState.trackerMode
+        : (['normal', 'lost'].includes(legacyMode) ? legacyMode : null);
+      delete savedState.mode;
+      lastKnown.set(trackerId, { ...savedState, trackerId, location, live: false });
     }
     console.log(`Loaded ${lastKnown.size} last known position(s) from ${DATA_FILE}`);
   } catch (error) {
@@ -291,7 +295,7 @@ function sanitizeReport(message, client) {
   const txPower = finiteNumber(message.txPower);
   const distanceM = finiteNumber(message.distanceM);
   const location = sanitizeLocation(message.location);
-  const mode = message.mode === 'lost' ? 'lost' : 'normal';
+  const trackerMode = ['normal', 'lost'].includes(message.trackerMode) ? message.trackerMode : null;
   return {
     trackerId,
     trackerName,
@@ -299,7 +303,7 @@ function sanitizeReport(message, client) {
     rssi: rssi !== null && rssi >= -150 && rssi <= 0 ? rssi : null,
     txPower: txPower !== null && txPower >= -100 && txPower <= 30 ? txPower : null,
     distanceM: distanceM !== null && distanceM >= 0 && distanceM <= 100000 ? distanceM : null,
-    mode,
+    trackerMode,
     live: true,
     userId: client.userId,
     reporterId: client.clientId,
@@ -574,7 +578,6 @@ function logoutAccount(request, response) {
   const token = cookies[SESSION_COOKIE];
   const sessionKey = token ? hashSession(token) : '';
   if (sessionKey) sessions.delete(sessionKey);
-  // Revoke active WebSocket connections that authenticated with this exact session.
   if (sessionKey) {
     for (const client of [...clients]) {
       if (client.sessionKey === sessionKey) destroyClient(client);

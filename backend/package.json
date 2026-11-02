@@ -1,8 +1,8 @@
 {
   "name": "opentag-backend",
-  "version": "1.0.0",
+  "version": "1.2.3",
   "private": true,
-  "description": "OpenTag BLE tracker backend",
+  "description": "OpenTag backend",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
