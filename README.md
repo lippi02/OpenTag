@@ -14,10 +14,11 @@ Same goes for browsers. Chromium browsers will 100% work, but I don't know what 
  7. Flash this firmware to each tracker you want to identify consistently across browsers/devices.
 
 ## Browser Setup
- 8. Open a Chromium-base browser
- 9. Go to: chrome://flags/#enable-experimental-web-platform-features and Enable it.
- 10. Grant location permission to display the current phone location and calculate distance to tracker-reporter locations.
- 11. Use **Add tracker** in the hamburger menu. The browser opens a Bluetooth chooser; choose one OpenTag device. Repeat for each tracker.\
+ 8. Open a Chromium-based browser
+ 9. Go to: chrome://flags/#enable-experimental-web-platform-features and Enable it. *(It may differ between browsers)*
+ 10. Go to opentag.ddns.net
+ 11. Grant location permission to display the current phone location and calculate distance to tracker-reporter locations.
+ 12. Use **Add tracker** in the hamburger menu. The browser opens a Bluetooth chooser; choose one OpenTag device. Repeat for each tracker.\
 (The current browser listens to one selected tracker at a time. Use a tracker's **Connect** button to switch the active BLE listener. All registered trackers and their last-known positions remain on the map.)
 
 # Hosting your own from TrueNAS
