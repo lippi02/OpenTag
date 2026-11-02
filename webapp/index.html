@@ -8,21 +8,603 @@
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
     integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
   <style>
-    :root{color-scheme:dark;--bg:#0b0f14;--panel:#121821;--panel2:#19212c;--text:#eef2f7;--muted:#9aa7b5;--border:#273241;--accent:#6ea8fe;--ok:#56d364;--warn:#e3b341;--orange:#f97316}
-    *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
-    button,input{font:inherit;color:var(--text);background:var(--panel2);border:1px solid var(--border);border-radius:10px}button{cursor:pointer;padding:10px 13px}button:hover{border-color:var(--accent)}button:disabled{opacity:.45;cursor:not-allowed}button.primary{background:var(--accent);border-color:var(--accent);color:#07111f;font-weight:750}button.ghost{background:transparent}
-    .app-shell{width:min(1500px,calc(100% - 24px));margin:0 auto;padding:12px 0 24px}.app-header{display:flex;align-items:center;gap:12px;min-height:58px;margin-bottom:12px;position:relative}
-    .brand{display:flex;align-items:center;min-width:0}.brand h1{font-size:clamp(23px,3vw,34px);line-height:1;margin:0;white-space:nowrap}.menu-button{width:44px;height:44px;padding:0;display:grid;place-items:center;background:var(--panel);flex:0 0 auto}.menu-button svg{width:23px;height:23px}.header-spacer{flex:1}
-    .mode-control{display:flex;align-items:center;gap:10px;background:var(--panel);border:1px solid var(--border);border-radius:11px;padding:7px 10px;flex:0 0 auto}.mode-label{min-width:74px;font-size:12px;font-weight:700}.switch{position:relative;width:48px;height:26px;display:inline-block}.switch input{opacity:0;width:0;height:0}.switch-track{position:absolute;inset:0;border-radius:99px;background:#374151;cursor:pointer;transition:.15s}.switch-track:before{content:"";position:absolute;width:18px;height:18px;top:4px;left:4px;border-radius:50%;background:white;transition:.15s}.switch input:checked+.switch-track{background:#d4a900}.switch input:checked+.switch-track:before{transform:translateX(22px)}.switch input:disabled+.switch-track{opacity:.4;cursor:not-allowed}
-    .account-bar{display:flex;align-items:center;gap:9px;padding:6px 8px 6px 11px;border:1px solid var(--border);border-radius:11px;background:var(--panel);white-space:nowrap}.account-bar span{font-size:12px;color:var(--muted)}.account-bar strong{color:var(--text)}.account-bar button{padding:7px 10px;font-size:12px}
-    .tracker-menu{position:absolute;z-index:1200;left:0;top:54px;width:min(390px,calc(100vw - 30px));max-height:min(72vh,680px);overflow:auto;background:#111821;border:1px solid #344253;border-radius:15px;padding:14px;box-shadow:0 18px 55px rgba(0,0,0,.55)}.tracker-menu[hidden]{display:none}.menu-heading{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:12px}.menu-heading h2{font-size:17px;margin:0}.menu-heading button{padding:8px 10px;font-size:12px}.tracker-list{display:grid;gap:8px}.tracker-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;padding:9px;background:var(--panel2);border:1px solid var(--border);border-radius:11px}.tracker-select{display:flex;align-items:center;gap:9px;min-width:0;text-align:left;background:transparent;border:0;padding:2px}.tracker-select:hover{border:0}.tracker-row.selected{border-color:var(--accent);box-shadow:inset 0 0 0 1px rgba(110,168,254,.25)}.tracker-row-main{min-width:0}.tracker-name{display:block;font-size:13px;font-weight:750;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.tracker-sub{display:block;font-size:11px;color:var(--muted);margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.tracker-status-dot{width:10px;height:10px;border-radius:50%;flex:0 0 auto;background:#f97316;box-shadow:0 0 0 3px rgba(249,115,22,.12)}.tracker-status-dot.online{background:#facc15;box-shadow:0 0 0 3px rgba(250,204,21,.12)}.tracker-row-actions{display:flex;align-items:center;gap:5px}.tracker-row-actions button{font-size:11px;padding:7px 8px}.menu-empty{padding:18px 10px;text-align:center;color:var(--muted);font-size:13px;background:var(--panel2);border-radius:10px}.menu-hint{font-size:11px;color:var(--muted);line-height:1.5;margin:12px 2px 2px}
-    .pill{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--border);background:var(--panel2);border-radius:999px;padding:5px 9px;font-size:11px;color:var(--muted)}
-    .grid{display:grid;grid-template-columns:320px minmax(0,1fr);gap:14px}.panel{min-width:0;background:var(--panel);border:1px solid var(--border);border-radius:15px;padding:15px;box-shadow:0 10px 30px rgba(0,0,0,.16)}.panel h2{font-size:15px;margin:0 0 12px}.status{display:flex;align-items:center;gap:10px;padding:11px;border-radius:11px;background:var(--panel2);margin-bottom:14px}.status-dot{width:10px;height:10px;background:#f85149;border-radius:50%;box-shadow:0 0 0 4px rgba(248,81,73,.12);flex:0 0 auto}.status-dot.online{background:#facc15;box-shadow:0 0 0 4px rgba(250,204,21,.13)}.status strong{font-size:13px}.status-sub{font-size:11px;color:var(--muted);margin-top:3px;line-height:1.4}.metric-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:10px 0 14px}.metric{min-height:70px;border-radius:10px;padding:10px;background:var(--panel2);min-width:0}.metric-label{font-size:10px;color:var(--muted);margin-bottom:6px}.metric-value{font-size:17px;font-weight:750;overflow-wrap:anywhere}.legend{display:flex;flex-wrap:wrap;gap:7px;margin-top:8px}.log{margin-top:15px;max-height:150px;overflow:auto;background:#090d12;border:1px solid var(--border);border-radius:10px;padding:9px 10px;font:10px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;white-space:pre-wrap;color:#c8d6e5}
-    #map{height:calc(100vh - 150px);min-height:520px;max-height:900px;border-radius:11px;overflow:hidden;background:#dfe7ef}.map-panel{padding:8px}
-    .auth-panel{max-width:520px;margin:9vh auto 0}.auth-panel h2{margin:0 0 8px;font-size:20px}.auth-panel p{color:var(--muted);line-height:1.5}.auth-panel label{display:block;color:var(--muted);font-size:13px;margin:12px 0 6px}.auth-panel input{width:100%;padding:11px}.auth-error{min-height:1.4em;color:#ff8c82;font-size:13px;margin-top:8px}.auth-actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:12px}.auth-actions button{flex:1 1 150px}.hint{font-size:11px;color:var(--muted);line-height:1.5;margin-top:12px}
-    #trackerApp[hidden],#authPanel[hidden]{display:none!important}.leaflet-popup-content-wrapper,.leaflet-popup-tip{background:#17212c;color:#eef2f7}.leaflet-popup-content{line-height:1.55}.leaflet-container a{color:#8ab9ff}
-    @media(max-width:900px){.grid{grid-template-columns:1fr}#map{height:60vh;min-height:430px}.app-header{flex-wrap:wrap}.header-spacer{flex:1}.account-bar{margin-left:auto}.mode-control{order:3}.tracker-menu{top:52px}}
-    @media(max-width:520px){.app-shell{width:calc(100% - 16px);padding-top:8px}.brand h1{font-size:22px}.account-bar{gap:5px;padding:5px 6px}.account-bar span{font-size:10px}.account-bar button{font-size:10px;padding:6px}.mode-control{padding:6px 8px}.grid{gap:9px}.panel{padding:12px}#map{min-height:400px}}
+  :root {
+    color-scheme: dark;
+    --bg: #0b0f14;
+    --panel: #121821;
+    --panel2: #19212c;
+    --text: #eef2f7;
+    --muted: #9aa7b5;
+    --border: #273241;
+    --accent: #6ea8fe;
+    --ok: #56d364;
+    --warn: #e3b341;
+    --orange: #f97316;
+  }
+
+  * {
+    box-sizing: border-box;
+  }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  }
+
+  button,input {
+    font: inherit;
+    color: var(--text);
+    background: var(--panel2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+  }
+
+  button {
+    cursor: pointer;
+    padding: 10px 13px;
+  }
+
+  button:hover {
+    border-color: var(--accent);
+  }
+
+  button:disabled {
+    opacity: .45;
+    cursor: not-allowed;
+  }
+
+  button.primary {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #07111f;
+    font-weight: 750;
+  }
+
+  button.ghost {
+    background: transparent;
+  }
+
+  .app-shell {
+    width: min(1500px,calc(100% - 24px));
+    margin: 0 auto;
+    padding: 12px 0 24px;
+  }
+
+  .app-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-height: 58px;
+    margin-bottom: 12px;
+    position: relative;
+  }
+
+  .brand {
+    display: flex;
+    align-items: center;
+    min-width: 0;
+  }
+
+  .brand h1 {
+    font-size: clamp(23px,3vw,34px);
+    line-height: 1;
+    margin: 0;
+    white-space: nowrap;
+  }
+
+  .menu-button {
+    width: 44px;
+    height: 44px;
+    padding: 0;
+    display: grid;
+    place-items: center;
+    background: var(--panel);
+    flex: 0 0 auto;
+  }
+
+  .menu-button svg {
+    width: 23px;
+    height: 23px;
+  }
+
+  .header-spacer {
+    flex: 1;
+  }
+
+  .mode-control {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 11px;
+    padding: 7px 10px;
+    flex: 0 0 auto;
+  }
+
+  .mode-label {
+    min-width: 74px;
+    font-size: 12px;
+    font-weight: 700;
+  }
+
+  .switch {
+    position: relative;
+    width: 48px;
+    height: 26px;
+    display: inline-block;
+  }
+
+  .switch input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+  }
+
+  .switch-track {
+    position: absolute;
+    inset: 0;
+    border-radius: 99px;
+    background: #374151;
+    cursor: pointer;
+    transition: .15s;
+  }
+
+  .switch-track:before {
+    content: "";
+    position: absolute;
+    width: 18px;
+    height: 18px;
+    top: 4px;
+    left: 4px;
+    border-radius: 50%;
+    background: white;
+    transition: .15s;
+  }
+
+  .switch input:checked+.switch-track {
+    background: #d4a900;
+  }
+
+  .switch input:checked+.switch-track:before {
+    transform: translateX(22px);
+  }
+
+  .switch input:disabled+.switch-track {
+    opacity: .4;
+    cursor: not-allowed;
+  }
+
+  .account-bar {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    padding: 6px 8px 6px 11px;
+    border: 1px solid var(--border);
+    border-radius: 11px;
+    background: var(--panel);
+    white-space: nowrap;
+  }
+
+  .account-bar span {
+    font-size: 12px;
+    color: var(--muted);
+  }
+
+  .account-bar strong {
+    color: var(--text);
+  }
+
+  .account-bar button {
+    padding: 7px 10px;
+    font-size: 12px;
+  }
+
+  .tracker-menu {
+    position: absolute;
+    z-index: 1200;
+    left: 0;
+    top: 54px;
+    width: min(390px,calc(100vw - 30px));
+    max-height: min(72vh,680px);
+    overflow: auto;
+    background: #111821;
+    border: 1px solid #344253;
+    border-radius: 15px;
+    padding: 14px;
+    box-shadow: 0 18px 55px rgba(0,0,0,.55);
+  }
+
+  .tracker-menu[hidden] {
+    display: none;
+  }
+
+  .menu-heading {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 12px;
+  }
+
+  .menu-heading h2 {
+    font-size: 17px;
+    margin: 0;
+  }
+
+  .menu-heading button {
+    padding: 8px 10px;
+    font-size: 12px;
+  }
+
+  .tracker-list {
+    display: grid;
+    gap: 8px;
+  }
+
+  .tracker-row {
+    display: grid;
+    grid-template-columns: minmax(0,1fr) auto;
+    gap: 8px;
+    padding: 9px;
+    background: var(--panel2);
+    border: 1px solid var(--border);
+    border-radius: 11px;
+  }
+
+  .tracker-select {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    min-width: 0;
+    text-align: left;
+    background: transparent;
+    border: 0;
+    padding: 2px;
+  }
+
+  .tracker-select:hover {
+    border: 0;
+  }
+
+  .tracker-row.selected {
+    border-color: var(--accent);
+    box-shadow: inset 0 0 0 1px rgba(110,168,254,.25);
+  }
+
+  .tracker-row-main {
+    min-width: 0;
+  }
+
+  .tracker-name {
+    display: block;
+    font-size: 13px;
+    font-weight: 750;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .tracker-sub {
+    display: block;
+    font-size: 11px;
+    color: var(--muted);
+    margin-top: 3px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .tracker-status-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    flex: 0 0 auto;
+    background: #f97316;
+    box-shadow: 0 0 0 3px rgba(249,115,22,.12);
+  }
+
+  .tracker-status-dot.online {
+    background: #facc15;
+    box-shadow: 0 0 0 3px rgba(250,204,21,.12);
+  }
+
+  .tracker-row-actions {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+  }
+
+  .tracker-row-actions button {
+    font-size: 11px;
+    padding: 7px 8px;
+  }
+
+  .menu-empty {
+    padding: 18px 10px;
+    text-align: center;
+    color: var(--muted);
+    font-size: 13px;
+    background: var(--panel2);
+    border-radius: 10px;
+  }
+
+  .menu-hint {
+    font-size: 11px;
+    color: var(--muted);
+    line-height: 1.5;
+    margin: 12px 2px 2px;
+  }
+
+  .pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    border: 1px solid var(--border);
+    background: var(--panel2);
+    border-radius: 999px;
+    padding: 5px 9px;
+    font-size: 11px;
+    color: var(--muted);
+  }
+
+  .grid {
+    display: grid;
+    grid-template-columns: 320px minmax(0,1fr);
+    gap: 14px;
+  }
+
+  .panel {
+    min-width: 0;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 15px;
+    padding: 15px;
+    box-shadow: 0 10px 30px rgba(0,0,0,.16);
+  }
+
+  .panel h2 {
+    font-size: 15px;
+    margin: 0 0 12px;
+  }
+
+  .status {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 11px;
+    border-radius: 11px;
+    background: var(--panel2);
+    margin-bottom: 14px;
+  }
+
+  .status-dot {
+    width: 10px;
+    height: 10px;
+    background: #f85149;
+    border-radius: 50%;
+    box-shadow: 0 0 0 4px rgba(248,81,73,.12);
+    flex: 0 0 auto;
+  }
+
+  .status-dot.online {
+    background: #facc15;
+    box-shadow: 0 0 0 4px rgba(250,204,21,.13);
+  }
+
+  .status strong {
+    font-size: 13px;
+  }
+
+  .status-sub {
+    font-size: 11px;
+    color: var(--muted);
+    margin-top: 3px;
+    line-height: 1.4;
+  }
+
+  .metric-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    margin: 10px 0 14px;
+  }
+
+  .metric {
+    min-height: 70px;
+    border-radius: 10px;
+    padding: 10px;
+    background: var(--panel2);
+    min-width: 0;
+  }
+
+  .metric-label {
+    font-size: 10px;
+    color: var(--muted);
+    margin-bottom: 6px;
+  }
+
+  .metric-value {
+    font-size: 17px;
+    font-weight: 750;
+    overflow-wrap: anywhere;
+  }
+
+  .legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 7px;
+    margin-top: 8px;
+  }
+
+  .log {
+    margin-top: 15px;
+    max-height: 150px;
+    overflow: auto;
+    background: #090d12;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 9px 10px;
+    font: 10px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    white-space: pre-wrap;
+    color: #c8d6e5;
+  }
+
+  #map {
+    height: calc(100vh - 150px);
+    min-height: 520px;
+    max-height: 900px;
+    border-radius: 11px;
+    overflow: hidden;
+    background: #dfe7ef;
+  }
+
+  .map-panel {
+    padding: 8px;
+  }
+
+  .auth-panel {
+    max-width: 520px;
+    margin: 9vh auto 0;
+  }
+
+  .auth-panel h2 {
+    margin: 0 0 8px;
+    font-size: 20px;
+  }
+
+  .auth-panel p {
+    color: var(--muted);
+    line-height: 1.5;
+  }
+
+  .auth-panel label {
+    display: block;
+    color: var(--muted);
+    font-size: 13px;
+    margin: 12px 0 6px;
+  }
+
+  .auth-panel input {
+    width: 100%;
+    padding: 11px;
+  }
+
+  .auth-error {
+    min-height: 1.4em;
+    color: #ff8c82;
+    font-size: 13px;
+    margin-top: 8px;
+  }
+
+  .auth-actions {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-top: 12px;
+  }
+
+  .auth-actions button {
+    flex: 1 1 150px;
+  }
+
+  .hint {
+    font-size: 11px;
+    color: var(--muted);
+    line-height: 1.5;
+    margin-top: 12px;
+  }
+
+  #trackerApp[hidden],#authPanel[hidden] {
+    display: none !important;
+  }
+
+  .leaflet-popup-content-wrapper,.leaflet-popup-tip {
+    background: #17212c;
+    color: #eef2f7;
+  }
+
+  .leaflet-popup-content {
+    line-height: 1.55;
+  }
+
+  .leaflet-container a {
+    color: #8ab9ff;
+  }
+
+  @media (max-width:900px) {
+    .grid {
+      grid-template-columns: 1fr;
+    }
+
+    #map {
+      height: 60vh;
+      min-height: 430px;
+    }
+
+    .app-header {
+      flex-wrap: wrap;
+    }
+
+    .header-spacer {
+      flex: 1;
+    }
+
+    .account-bar {
+      margin-left: auto;
+    }
+
+    .mode-control {
+      order: 3;
+    }
+
+    .tracker-menu {
+      top: 52px;
+    }
+  }
+
+  @media (max-width:520px) {
+    .app-shell {
+      width: calc(100% - 16px);
+      padding-top: 8px;
+    }
+
+    .brand h1 {
+      font-size: 22px;
+    }
+
+    .account-bar {
+      gap: 5px;
+      padding: 5px 6px;
+    }
+
+    .account-bar span {
+      font-size: 10px;
+    }
+
+    .account-bar button {
+      font-size: 10px;
+      padding: 6px;
+    }
+
+    .mode-control {
+      padding: 6px 8px;
+    }
+
+    .grid {
+      gap: 9px;
+    }
+
+    .panel {
+      padding: 12px;
+    }
+
+    #map {
+      min-height: 400px;
+    }
+  }
   </style>
 </head>
 <body>
@@ -99,7 +681,10 @@
     map.createPane(TRACKER_MARKER_PANE);
     map.getPane(TRACKER_MARKER_PANE).style.zIndex = '640';
     map.getPane(TRACKER_MARKER_PANE).style.pointerEvents = 'auto';
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '&copy; OpenStreetMap közreműködők' }).addTo(map);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      attribution: '&copy; OpenStreetMap közreműködők'
+    }).addTo(map);
 
     let authenticated = false, currentUser = null, authMode = 'login';
     let sharedSocket = null, reconnectTimer = null, reconnectDelay = 1000, reconnectEverOpened = false;
@@ -114,12 +699,41 @@
     const LAST_SELECTED_KEY = 'opentag.v2.lastSelectedTracker';
     let bleDeviceMap = readBleDeviceMap();
 
-    function readBleDeviceMap() { try { return JSON.parse(localStorage.getItem(BLE_DEVICE_MAP_KEY) || '{}'); } catch (_) { return {}; } }
-    function writeBleDeviceMap() { try { localStorage.setItem(BLE_DEVICE_MAP_KEY, JSON.stringify(bleDeviceMap)); } catch (_) {} }
-    function log(message) { const el = $('log'); if (!el) return; el.textContent += `[${new Date().toLocaleTimeString('hu-HU')}] ${message}\n`; el.scrollTop = el.scrollHeight; }
-    function escapeHtml(value) { return String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
-    function serverNow() { return Date.now() + serverOffsetMs; }
-    function formatDistance(m) { if (!Number.isFinite(m)) return '–'; if (m < 1000) return `${Math.round(m)} m`; return `${(m / 1000).toFixed(m < 10000 ? 1 : 0)} km`; }
+    function readBleDeviceMap() {
+      try {
+        return JSON.parse(localStorage.getItem(BLE_DEVICE_MAP_KEY) || '{}');
+      } catch (_) {
+        return {};
+      }
+    }
+    function writeBleDeviceMap() {
+      try {
+        localStorage.setItem(BLE_DEVICE_MAP_KEY, JSON.stringify(bleDeviceMap));
+      } catch (_) { }
+    }
+    function log(message) {
+      const el = $('log');
+      if (!el) return;
+      el.textContent += `[${new Date().toLocaleTimeString('hu-HU')}] ${message}\n`;
+      el.scrollTop = el.scrollHeight;
+    }
+    function escapeHtml(value) {
+      return String(value ?? '').replace(/[&<>"']/g, c => ({
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        "'": '&#39;'
+      }[c]));
+    }
+    function serverNow() {
+      return Date.now() + serverOffsetMs;
+    }
+    function formatDistance(m) {
+      if (!Number.isFinite(m)) return '–';
+      if (m < 1000) return `${Math.round(m)} m`;
+      return `${(m / 1000).toFixed(m < 10000 ? 1 : 0)} km`;
+    }
     function haversine(a, b) {
       if (!a || !b) return NaN;
       const rad = Math.PI / 180, lat1 = Number(a[0]), lon1 = Number(a[1]), lat2 = Number(b[0]), lon2 = Number(b[1]);
@@ -128,13 +742,37 @@
       const h = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * rad) * Math.cos(lat2 * rad) * Math.sin(dLon / 2) ** 2;
       return 6371000 * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
     }
-    function formatAge(ms) { if (!Number.isFinite(ms) || ms < 0) return '–'; const sec = Math.floor(ms / 1000); if (sec < 60) return `${sec}s ago`; const min = Math.floor(sec / 60); if (min < 60) return `${min} min ago`; const h = Math.floor(min / 60); if (h < 24) return `${h} h ago`; return `${Math.floor(h / 24)} d ago`; }
-    function getState(trackerId) { return sharedStates.get(trackerId) || null; }
-    function isOnline(state) { return Boolean(state && state.live !== false && serverNow() - Number(state.updatedAt || 0) <= TRACKER_TTL_MS); }
-    function currentSelectedRecord() { return ownedTrackers.find(t => t.trackerId === selectedTrackerId) || null; }
-    function currentSelectedState() { return selectedTrackerId ? getState(selectedTrackerId) : null; }
-    function setBackendState(text, online) { const value = `${online ? '🟢' : '⚪'} Shared backend: ${text}`; $('backendLegend').textContent = value; }
-    function setStatus(text, sub = '', online = false) { $('statusText').textContent = text; $('statusSub').textContent = sub; $('statusDot').classList.toggle('online', online); }
+    function formatAge(ms) {
+      if (!Number.isFinite(ms) || ms < 0) return '–';
+      const sec = Math.floor(ms / 1000);
+      if (sec < 60) return `${sec}s ago`;
+      const min = Math.floor(sec / 60);
+      if (min < 60) return `${min} min ago`;
+      const h = Math.floor(min / 60);
+      if (h < 24) return `${h} h ago`;
+      return `${Math.floor(h / 24)} d ago`;
+    }
+    function getState(trackerId) {
+      return sharedStates.get(trackerId) || null;
+    }
+    function isOnline(state) {
+      return Boolean(state && state.live !== false && serverNow() - Number(state.updatedAt || 0) <= TRACKER_TTL_MS);
+    }
+    function currentSelectedRecord() {
+      return ownedTrackers.find(t => t.trackerId === selectedTrackerId) || null;
+    }
+    function currentSelectedState() {
+      return selectedTrackerId ? getState(selectedTrackerId) : null;
+    }
+    function setBackendState(text, online) {
+      const value = `${online ? '🟢' : '⚪'} Shared backend: ${text}`;
+      $('backendLegend').textContent = value;
+    }
+    function setStatus(text, sub = '', online = false) {
+      $('statusText').textContent = text;
+      $('statusSub').textContent = sub;
+      $('statusDot').classList.toggle('online', online);
+    }
 
     function distanceForState(trackerId, state) {
       return myPosition && state?.location ? haversine(myPosition, [state.location.lat, state.location.lng]) : NaN;
@@ -157,9 +795,20 @@
       const state = getState(trackerId), marker = markers.get(trackerId);
       if (!state || !marker) return;
       const online = isOnline(state);
-      marker.setStyle({ color: online ? '#854d0e' : '#9a3412', fillColor: online ? '#facc15' : '#f97316', fillOpacity: 1, opacity: 1, weight: 2 });
+      marker.setStyle({
+        color: online ? '#854d0e' : '#9a3412',
+        fillColor: online ? '#facc15' : '#f97316',
+        fillOpacity: 1,
+        opacity: 1,
+        weight: 2
+      });
       const circle = accuracyCircles.get(trackerId);
-      if (circle) circle.setStyle({ color: online ? '#facc15' : '#f97316', fillColor: online ? '#facc15' : '#f97316', fillOpacity: online ? .10 : .04, opacity: online ? 1 : .55 });
+      if (circle) circle.setStyle({
+        color: online ? '#facc15' : '#f97316',
+        fillColor: online ? '#facc15' : '#f97316',
+        fillOpacity: online ? .10 : .04,
+        opacity: online ? 1 : .55
+      });
     }
     function renderState(state) {
       if (!state || !state.trackerId) return;
@@ -170,16 +819,38 @@
         const latlng = [Number(state.location.lat), Number(state.location.lng)];
         let marker = markers.get(state.trackerId);
         if (!marker) {
-          marker = L.circleMarker(latlng, { pane: TRACKER_MARKER_PANE, radius: 8, color: '#854d0e', weight: 2, fillColor: '#facc15', fillOpacity: 1 }).addTo(map);
+          marker = L.circleMarker(latlng, {
+            pane: TRACKER_MARKER_PANE,
+            radius: 8,
+            color: '#854d0e',
+            weight: 2,
+            fillColor: '#facc15',
+            fillOpacity: 1
+          }).addTo(map);
           marker.bindPopup(() => popupHtml(getState(state.trackerId) || state));
           markers.set(state.trackerId, marker);
         } else marker.setLatLng(latlng);
         const accuracy = Number(state.location.accuracy);
         let circle = accuracyCircles.get(state.trackerId);
         if (Number.isFinite(accuracy) && accuracy > 0) {
-          if (!circle) { circle = L.circle(latlng, { radius: accuracy, color: '#facc15', fillColor: '#facc15', fillOpacity: .08, weight: 1 }).addTo(map); accuracyCircles.set(state.trackerId, circle); }
-          else { circle.setLatLng(latlng); circle.setRadius(accuracy); }
-        } else if (circle) { map.removeLayer(circle); accuracyCircles.delete(state.trackerId); }
+          if (!circle) {
+            circle = L.circle(latlng, {
+              radius: accuracy,
+              color: '#facc15',
+              fillColor: '#facc15',
+              fillOpacity: .08,
+              weight: 1
+            }).addTo(map);
+            accuracyCircles.set(state.trackerId, circle);
+          }
+          else {
+            circle.setLatLng(latlng);
+            circle.setRadius(accuracy);
+          }
+        } else if (circle) {
+          map.removeLayer(circle);
+          accuracyCircles.delete(state.trackerId);
+        }
         marker.setPopupContent(popupHtml(state));
         updateMarkerStyle(state.trackerId);
       }
@@ -190,9 +861,22 @@
     function markOffline(trackerId, lastKnown = null) {
       const current = getState(trackerId);
       if (lastKnown && lastKnown.location) {
-        if (!current || Number(lastKnown.updatedAt || 0) >= Number(current.updatedAt || 0)) renderState({ ...lastKnown, live: false });
-        else { current.live = false; updateMarkerStyle(trackerId); updateDashboard(); renderTrackerList(); }
-      } else if (current) { current.live = false; updateMarkerStyle(trackerId); updateDashboard(); renderTrackerList(); }
+        if (!current || Number(lastKnown.updatedAt || 0) >= Number(current.updatedAt || 0)) renderState({
+          ...lastKnown,
+          live: false
+        });
+        else {
+          current.live = false;
+          updateMarkerStyle(trackerId);
+          updateDashboard();
+          renderTrackerList();
+        }
+      } else if (current) {
+        current.live = false;
+        updateMarkerStyle(trackerId);
+        updateDashboard();
+        renderTrackerList();
+      }
     }
     function updateDashboard() {
       const record = currentSelectedRecord(), state = currentSelectedState();
@@ -231,7 +915,10 @@
     function renderTrackerList() {
       const list = $('trackerList');
       if (!list) return;
-      if (!ownedTrackers.length) { list.innerHTML = '<div class="menu-empty">No trackers yet. Choose “Add tracker” to pair your first OpenTag.</div>'; return; }
+      if (!ownedTrackers.length) {
+        list.innerHTML = '<div class="menu-empty">No trackers yet. Choose “Add tracker” to pair your first OpenTag.</div>';
+        return;
+      }
       list.innerHTML = ownedTrackers.map(record => {
         const state = getState(record.trackerId), online = isOnline(state), selected = record.trackerId === selectedTrackerId;
         const mode = state?.trackerMode === 'lost' ? 'Lost' : state?.trackerMode === 'normal' ? 'Normal' : 'Mode unknown';
@@ -253,51 +940,119 @@
       const state = getState(trackerId), marker = markers.get(trackerId);
       const position = state?.location ? [Number(state.location.lat), Number(state.location.lng)] : null;
       if (marker) marker.openPopup();
-      if (!position) { log('This tracker has no saved location yet.'); return; }
+      if (!position) {
+        log('This tracker has no saved location yet.');
+        return;
+      }
       programmaticMapMove = true;
-      if (myPosition) map.fitBounds(L.latLngBounds([myPosition, position]), { padding: [40, 40], maxZoom: 16 });
+      if (myPosition) map.fitBounds(L.latLngBounds([myPosition, position]), {
+        padding: [40, 40],
+        maxZoom: 16
+      });
       else map.setView(position, 16);
-      map.once('moveend', () => { programmaticMapMove = false; });
-      setTimeout(() => { programmaticMapMove = false; }, 900);
+      map.once('moveend', () => {
+        programmaticMapMove = false;
+      });
+      setTimeout(() => {
+        programmaticMapMove = false;
+      }, 900);
     }
     function selectTracker(trackerId, focus = true) {
       const record = ownedTrackers.find(item => item.trackerId === trackerId);
       if (!record) return;
       selectedTrackerId = trackerId;
-      try { localStorage.setItem(LAST_SELECTED_KEY, trackerId); } catch (_) {}
-      renderTrackerList(); updateDashboard();
+      try {
+        localStorage.setItem(LAST_SELECTED_KEY, trackerId);
+      } catch (_) { }
+      renderTrackerList();
+      updateDashboard();
       if (focus) focusTracker(trackerId);
-      $('trackerMenu').hidden = true; $('menuBtn').setAttribute('aria-expanded', 'false');
+      $('trackerMenu').hidden = true;
+      $('menuBtn').setAttribute('aria-expanded', 'false');
     }
     function tryInitialMapFit() {
       if (firstMapFitDone || !initialStateSynced || !myPosition) return;
       const points = [myPosition];
       for (const state of sharedStates.values()) if (state.location) points.push([Number(state.location.lat), Number(state.location.lng)]);
-      if (points.length > 1) { programmaticMapMove = true; map.fitBounds(L.latLngBounds(points), { padding: [36, 36], maxZoom: 15 }); map.once('moveend', () => { programmaticMapMove = false; }); firstMapFitDone = true; }
-      else { map.setView(myPosition, 15); firstMapFitDone = true; }
-      setTimeout(() => { programmaticMapMove = false; }, 900);
+      if (points.length > 1) {
+        programmaticMapMove = true;
+        map.fitBounds(L.latLngBounds(points), {
+          padding: [36, 36],
+          maxZoom: 15
+        });
+        map.once('moveend', () => {
+          programmaticMapMove = false;
+        });
+        firstMapFitDone = true;
+      }
+      else {
+        map.setView(myPosition, 15);
+        firstMapFitDone = true;
+      }
+      setTimeout(() => {
+        programmaticMapMove = false;
+      }, 900);
     }
-    map.on('dragstart', () => { if (!programmaticMapMove) userMovedMap = true; });
-    map.on('zoomstart', () => { if (!programmaticMapMove) userMovedMap = true; });
+    map.on('dragstart', () => {
+      if (!programmaticMapMove) userMovedMap = true;
+    });
+    map.on('zoomstart', () => {
+      if (!programmaticMapMove) userMovedMap = true;
+    });
 
     function updateOwnMarker(position) {
-      myPosition = [position.coords.latitude, position.coords.longitude]; myAccuracy = Number(position.coords.accuracy);
-      if (!myMarker) myMarker = L.circleMarker(myPosition, { radius: 8, color: '#2f81f7', fillColor: '#2f81f7', fillOpacity: .95, weight: 2 }).addTo(map);
+      myPosition = [position.coords.latitude, position.coords.longitude];
+      myAccuracy = Number(position.coords.accuracy);
+      if (!myMarker) myMarker = L.circleMarker(myPosition, {
+        radius: 8,
+        color: '#2f81f7',
+        fillColor: '#2f81f7',
+        fillOpacity: .95,
+        weight: 2
+      }).addTo(map);
       else myMarker.setLatLng(myPosition);
       myMarker.bindPopup(`This device<br>GPS accuracy: ${Number.isFinite(myAccuracy) ? Math.round(myAccuracy) + ' m' : '–'}`);
-      if (!myAccuracyCircle) myAccuracyCircle = L.circle(myPosition, { radius: Math.max(1, myAccuracy || 1), color: '#2f81f7', fillColor: '#2f81f7', fillOpacity: .05, weight: 1 }).addTo(map);
-      else { myAccuracyCircle.setLatLng(myPosition); myAccuracyCircle.setRadius(Math.max(1, myAccuracy || 1)); }
-      updateDashboard(); renderTrackerList(); tryInitialMapFit();
+      if (!myAccuracyCircle) myAccuracyCircle = L.circle(myPosition, {
+        radius: Math.max(1, myAccuracy || 1),
+        color: '#2f81f7',
+        fillColor: '#2f81f7',
+        fillOpacity: .05,
+        weight: 1
+      }).addTo(map);
+      else {
+        myAccuracyCircle.setLatLng(myPosition);
+        myAccuracyCircle.setRadius(Math.max(1, myAccuracy || 1));
+      }
+      updateDashboard();
+      renderTrackerList();
+      tryInitialMapFit();
     }
     function startLocation() {
       if (locationWatchId !== null || !navigator.geolocation) return;
-      locationWatchId = navigator.geolocation.watchPosition(updateOwnMarker, error => log(`Location error: ${error.message}`), { enableHighAccuracy: true, maximumAge: 5000, timeout: 15000 });
+      locationWatchId = navigator.geolocation.watchPosition(updateOwnMarker, error => log(`Location error: ${error.message}`), {
+        enableHighAccuracy: true,
+        maximumAge: 5000,
+        timeout: 15000
+      });
       log('Location service started.');
     }
 
     async function apiJson(url, options = {}) {
-      const response = await fetch(url, { credentials: 'same-origin', cache: 'no-store', ...options, headers: { ...(options.headers || {}), ...(options.body ? { 'Content-Type': 'application/json' } : {}) } });
-      let result = {}; try { result = await response.json(); } catch (_) {}
+      const response = await fetch(url, {
+        credentials: 'same-origin',
+        cache: 'no-store',
+        ...options,
+        headers: {
+          ...(options.headers || {}),
+          ...(options.body ? {
+            'Content-Type': 'application/json'
+          } : {})
+        }
+      });
+      let result = {};
+      try {
+        result = await response.json();
+      } catch (_) { }
       if (!response.ok) throw new Error(result.error || `Request failed (${response.status})`);
       return result;
     }
@@ -305,10 +1060,14 @@
       if (!Array.isArray(list)) return;
       ownedTrackers = list;
       if (!selectedTrackerId || !ownedTrackers.some(t => t.trackerId === selectedTrackerId)) {
-        let remembered = ''; try { remembered = localStorage.getItem(LAST_SELECTED_KEY) || ''; } catch (_) {}
+        let remembered = '';
+        try {
+          remembered = localStorage.getItem(LAST_SELECTED_KEY) || '';
+        } catch (_) { }
         selectedTrackerId = ownedTrackers.some(t => t.trackerId === remembered) ? remembered : (ownedTrackers[0]?.trackerId || null);
       }
-      renderTrackerList(); updateDashboard();
+      renderTrackerList();
+      updateDashboard();
     }
     async function refreshSharedState() {
       if (!authenticated) return;
@@ -319,31 +1078,85 @@
         const known = Array.isArray(snapshot.lastKnown) ? snapshot.lastKnown : [];
         const live = Array.isArray(snapshot.trackers) ? snapshot.trackers : [];
         const liveIds = new Set(live.map(s => s.trackerId));
-        for (const s of known) renderState({ ...s, live: false });
-        for (const s of live) renderState({ ...s, live: true });
+        for (const s of known) renderState({
+          ...s,
+          live: false
+        });
+        for (const s of live) renderState({
+          ...s,
+          live: true
+        });
         for (const [id, state] of sharedStates) if (!liveIds.has(id) && !known.some(s => s.trackerId === id)) markOffline(id);
         initialStateSynced = true;
         tryInitialMapFit();
-      } catch (error) { if (error.message.includes('Authentication')) return showSignIn('Your session expired. Please sign in again.'); }
+      } catch (error) {
+        if (error.message.includes('Authentication')) return showSignIn('Your session expired. Please sign in again.');
+      }
     }
-    function startStatePolling() { if (statePollTimer) clearInterval(statePollTimer); refreshSharedState(); statePollTimer = setInterval(refreshSharedState, 10000); }
-    function backendWsUrl() { return `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws/`; }
+    function startStatePolling() {
+      if (statePollTimer) clearInterval(statePollTimer);
+      refreshSharedState();
+      statePollTimer = setInterval(refreshSharedState, 10000);
+    }
+    function backendWsUrl() {
+      return `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws/`;
+    }
     function backendMessage(message) {
       if (!message || typeof message !== 'object') return;
-      if (message.type === 'helloAck') { if (message.serverTime) serverOffsetMs = message.serverTime - Date.now(); if (message.appVersion) log(`Backend version ${message.appVersion}.`); return; }
+      if (message.type === 'helloAck') {
+        if (message.serverTime) serverOffsetMs = message.serverTime - Date.now();
+        if (message.appVersion) log(`Backend version ${message.appVersion}.`);
+        return;
+      }
       if (message.type === 'snapshot') {
         if (message.serverTime) serverOffsetMs = message.serverTime - Date.now();
         updateOwnedTrackers(message.ownedTrackers || ownedTrackers);
-        (message.lastKnown || []).forEach(s => renderState({ ...s, live: false }));
-        (message.trackers || []).forEach(s => renderState({ ...s, live: true }));
+        (message.lastKnown || []).forEach(s => renderState({
+          ...s,
+          live: false
+        }));
+        (message.trackers || []).forEach(s => renderState({
+          ...s,
+          live: true
+        }));
         initialStateSynced = true;
         tryInitialMapFit();
-        setBackendState('connected', true); return;
+        setBackendState('connected', true);
+        return;
       }
-      if (message.type === 'trackerState') { renderState(message.state); return; }
-      if (message.type === 'trackerRemoved') { markOffline(message.trackerId, message.lastKnown); return; }
-      if (message.type === 'trackerRenamed') { const item = ownedTrackers.find(t => t.trackerId === message.trackerId); if (item) item.name = message.name; const state = getState(message.trackerId); if (state) state.trackerName = message.name; renderTrackerList(); updateDashboard(); return; }
-      if (message.type === 'trackerDeleted') { ownedTrackers = ownedTrackers.filter(t => t.trackerId !== message.trackerId); sharedStates.delete(message.trackerId); if (markers.has(message.trackerId)) { map.removeLayer(markers.get(message.trackerId)); markers.delete(message.trackerId); } if (accuracyCircles.has(message.trackerId)) { map.removeLayer(accuracyCircles.get(message.trackerId)); accuracyCircles.delete(message.trackerId); } if (selectedTrackerId === message.trackerId) selectedTrackerId = ownedTrackers[0]?.trackerId || null; renderTrackerList(); updateDashboard(); return; }
+      if (message.type === 'trackerState') {
+        renderState(message.state);
+        return;
+      }
+      if (message.type === 'trackerRemoved') {
+        markOffline(message.trackerId, message.lastKnown);
+        return;
+      }
+      if (message.type === 'trackerRenamed') {
+        const item = ownedTrackers.find(t => t.trackerId === message.trackerId);
+        if (item) item.name = message.name;
+        const state = getState(message.trackerId);
+        if (state) state.trackerName = message.name;
+        renderTrackerList();
+        updateDashboard();
+        return;
+      }
+      if (message.type === 'trackerDeleted') {
+        ownedTrackers = ownedTrackers.filter(t => t.trackerId !== message.trackerId);
+        sharedStates.delete(message.trackerId);
+        if (markers.has(message.trackerId)) {
+          map.removeLayer(markers.get(message.trackerId));
+          markers.delete(message.trackerId);
+        }
+        if (accuracyCircles.has(message.trackerId)) {
+          map.removeLayer(accuracyCircles.get(message.trackerId));
+          accuracyCircles.delete(message.trackerId);
+        }
+        if (selectedTrackerId === message.trackerId) selectedTrackerId = ownedTrackers[0]?.trackerId || null;
+        renderTrackerList();
+        updateDashboard();
+        return;
+      }
       if (message.type === 'error') log(`Backend error: ${message.message || 'unknown error'}`);
     }
     function connectBackend() {
@@ -351,13 +1164,46 @@
       setBackendState('connecting…', false);
       try {
         sharedSocket = new WebSocket(backendWsUrl());
-        sharedSocket.addEventListener('open', () => { reconnectDelay = 1000; reconnectEverOpened = true; setBackendState('connected', true); log('Shared backend connected.'); sharedSocket.send(JSON.stringify({ type: 'hello', appVersion: 'v2.0.3' })); });
-        sharedSocket.addEventListener('message', event => { try { backendMessage(JSON.parse(event.data)); } catch (error) { log(`Backend message error: ${error.message}`); } });
-        sharedSocket.addEventListener('close', () => { setBackendState(reconnectEverOpened ? 'disconnected; retrying…' : 'cannot connect; retrying…', false); if (authenticated) { clearTimeout(reconnectTimer); reconnectTimer = setTimeout(connectBackend, reconnectDelay); reconnectDelay = Math.min(15000, reconnectDelay * 2); } });
+        sharedSocket.addEventListener('open', () => {
+          reconnectDelay = 1000;
+          reconnectEverOpened = true;
+          setBackendState('connected', true);
+          log('Shared backend connected.');
+          sharedSocket.send(JSON.stringify({
+            type: 'hello',
+            appVersion: 'v2.0.3'
+          }));
+        });
+        sharedSocket.addEventListener('message', event => {
+          try {
+            backendMessage(JSON.parse(event.data));
+          } catch (error) {
+            log(`Backend message error: ${error.message}`);
+          }
+        });
+        sharedSocket.addEventListener('close', () => {
+          setBackendState(reconnectEverOpened ? 'disconnected; retrying…' : 'cannot connect; retrying…', false);
+          if (authenticated) {
+            clearTimeout(reconnectTimer);
+            reconnectTimer = setTimeout(connectBackend, reconnectDelay);
+            reconnectDelay = Math.min(15000, reconnectDelay * 2);
+          }
+        });
         sharedSocket.addEventListener('error', () => setBackendState('connection error', false));
-      } catch (error) { setBackendState('connection error', false); log(`WebSocket error: ${error.message}`); }
+      } catch (error) {
+        setBackendState('connection error', false);
+        log(`WebSocket error: ${error.message}`);
+      }
     }
-    function sendWs(message) { if (!sharedSocket || sharedSocket.readyState !== WebSocket.OPEN) return false; try { sharedSocket.send(JSON.stringify(message)); return true; } catch (_) { return false; } }
+    function sendWs(message) {
+      if (!sharedSocket || sharedSocket.readyState !== WebSocket.OPEN) return false;
+      try {
+        sharedSocket.send(JSON.stringify(message));
+        return true;
+      } catch (_) {
+        return false;
+      }
+    }
 
     async function readDeviceIdentity(device) {
       if (!device?.gatt) throw new Error('This Bluetooth device does not expose GATT.');
@@ -369,129 +1215,293 @@
           const idChar = await service.getCharacteristic(TRACKER_ID_UUID);
           const value = await idChar.readValue();
           deviceId = new TextDecoder().decode(value).replace(/\0/g, '').trim();
-        } catch (_) {}
+        } catch (_) { }
         let mode = null;
         try {
           const modeChar = await service.getCharacteristic(MODE_UUID);
           const value = (await modeChar.readValue()).getUint8(0);
           if (value === 0) mode = 'normal'; else if (value === 1) mode = 'lost';
-        } catch (_) {}
+        } catch (_) { }
         if (!deviceId) deviceId = `browser-${String(device.id || '').replace(/[^a-zA-Z0-9.-]/g, '').slice(0, 96)}`;
-        return { deviceId, mode, stable: !deviceId.startsWith('browser-') };
-      } finally { try { if (device.gatt.connected) device.gatt.disconnect(); } catch (_) {} }
+        return {
+          deviceId,
+          mode,
+          stable: !deviceId.startsWith('browser-')
+        };
+      } finally {
+        try {
+          if (device.gatt.connected) device.gatt.disconnect();
+        } catch (_) { }
+      }
     }
     async function addTracker() {
-      if (!navigator.bluetooth) { alert('Web Bluetooth is not available. Use a supported Chromium browser over HTTPS.'); return; }
+      if (!navigator.bluetooth) {
+        alert('Web Bluetooth is not available. Use a supported Chromium browser over HTTPS.');
+        return;
+      }
       $('addTrackerBtn').disabled = true;
       try {
-        const device = await navigator.bluetooth.requestDevice({ filters: [{ namePrefix: 'OpenTag' }], optionalServices: [SERVICE_UUID] });
+        const device = await navigator.bluetooth.requestDevice({
+          filters: [{
+            namePrefix: 'OpenTag'
+          }],
+          optionalServices: [SERVICE_UUID]
+        });
         const identity = await readDeviceIdentity(device);
-        const result = await apiJson('/api/trackers/add', { method: 'POST', body: JSON.stringify({ deviceId: identity.deviceId, name: device.name || 'OpenTag tracker' }) });
+        const result = await apiJson('/api/trackers/add', {
+          method: 'POST',
+          body: JSON.stringify({
+            deviceId: identity.deviceId,
+            name: device.name || 'OpenTag tracker'
+          })
+        });
         const record = result.tracker;
         await new Promise(resolve => setTimeout(resolve, 350));
         if (!identity.stable) log('This firmware has no hardware Device ID characteristic. A browser-specific ID was used; flash v2 firmware for a stable cross-device identity.');
-        bleDeviceMap[record.trackerId] = device.id; writeBleDeviceMap();
+        bleDeviceMap[record.trackerId] = device.id;
+        writeBleDeviceMap();
         await refreshSharedState();
         selectTracker(record.trackerId, false);
         await startListening(device, record, identity.mode);
       } catch (error) {
-        if (error?.name !== 'NotFoundError') { log(`Add tracker failed: ${error.message}`); alert(error.message); }
-      } finally { $('addTrackerBtn').disabled = false; }
+        if (error?.name !== 'NotFoundError') {
+          log(`Add tracker failed: ${error.message}`);
+          alert(error.message);
+        }
+      } finally {
+        $('addTrackerBtn').disabled = false;
+      }
     }
     async function findRememberedDevice(record) {
       if (!navigator.bluetooth?.getDevices) return null;
       const savedId = bleDeviceMap[record.trackerId];
       if (!savedId) return null;
-      try { const devices = await navigator.bluetooth.getDevices(); return devices.find(d => d.id === savedId) || null; } catch (_) { return null; }
+      try {
+        const devices = await navigator.bluetooth.getDevices();
+        return devices.find(d => d.id === savedId) || null;
+      } catch (_) {
+        return null;
+      }
     }
     async function connectOrDisconnect(trackerId) {
-      const record = ownedTrackers.find(t => t.trackerId === trackerId); if (!record) return;
-      if (activeTracking && activeTracker?.trackerId === trackerId) { stopActiveTracking(); renderTrackerList(); updateDashboard(); return; }
+      const record = ownedTrackers.find(t => t.trackerId === trackerId);
+      if (!record) return;
+      if (activeTracking && activeTracker?.trackerId === trackerId) {
+        stopActiveTracking();
+        renderTrackerList();
+        updateDashboard();
+        return;
+      }
       selectTracker(trackerId, true);
-      if (!navigator.bluetooth) { alert('Web Bluetooth is not available in this browser.'); return; }
+      if (!navigator.bluetooth) {
+        alert('Web Bluetooth is not available in this browser.');
+        return;
+      }
       try {
         let device = await findRememberedDevice(record);
         if (!device) {
-          device = await navigator.bluetooth.requestDevice({ filters: [{ namePrefix: 'OpenTag' }], optionalServices: [SERVICE_UUID] });
+          device = await navigator.bluetooth.requestDevice({
+            filters: [{
+              namePrefix: 'OpenTag'
+            }],
+            optionalServices: [SERVICE_UUID]
+          });
         }
         const identity = await readDeviceIdentity(device);
         await new Promise(resolve => setTimeout(resolve, 350));
         if (identity.deviceId !== record.deviceId && !record.legacy) throw new Error('The selected Bluetooth device does not match this tracker. Use Add tracker to register it as a separate device.');
         let resolvedRecord = record;
         if (record.legacy && identity.deviceId !== record.deviceId) {
-          const migrated = await apiJson('/api/trackers/add', { method: 'POST', body: JSON.stringify({ deviceId: identity.deviceId, name: record.name }) });
+          const migrated = await apiJson('/api/trackers/add', {
+            method: 'POST',
+            body: JSON.stringify({
+              deviceId: identity.deviceId,
+              name: record.name
+            })
+          });
           resolvedRecord = migrated.tracker;
           ownedTrackers = ownedTrackers.map(item => item.trackerId === record.trackerId ? resolvedRecord : item);
           if (selectedTrackerId === record.trackerId) selectedTrackerId = resolvedRecord.trackerId;
           delete bleDeviceMap[record.trackerId];
         }
-        bleDeviceMap[resolvedRecord.trackerId] = device.id; writeBleDeviceMap();
+        bleDeviceMap[resolvedRecord.trackerId] = device.id;
+        writeBleDeviceMap();
         await startListening(device, resolvedRecord, identity.mode);
-      } catch (error) { if (error?.name !== 'NotFoundError') { log(`Tracker connection failed: ${error.message}`); alert(error.message); } }
+      } catch (error) {
+        if (error?.name !== 'NotFoundError') {
+          log(`Tracker connection failed: ${error.message}`);
+          alert(error.message);
+        }
+      }
     }
     async function startListening(device, record, initialMode = null) {
       stopActiveTracking(false);
       if (initialMode) {
-        const state = getState(record.trackerId) || { trackerId: record.trackerId, deviceId: record.deviceId, trackerName: record.name, updatedAt: Date.now(), live: false };
-        state.trackerMode = initialMode; state.updatedAt = Date.now(); renderState(state);
+        const state = getState(record.trackerId) || {
+          trackerId: record.trackerId,
+          deviceId: record.deviceId,
+          trackerName: record.name,
+          updatedAt: Date.now(),
+          live: false
+        };
+        state.trackerMode = initialMode;
+        state.updatedAt = Date.now();
+        renderState(state);
       }
-      activeDevice = device; activeTracker = record; activeTracking = true; receiving = false; lastAdvertisementAt = 0; lastReportSentAt = 0; lastRssi = null; lastTxPower = null; rssiSamples = [];
-      activeListener = onAdvertisement; activeAbortController = new AbortController();
+      activeDevice = device;
+      activeTracker = record;
+      activeTracking = true;
+      receiving = false;
+      lastAdvertisementAt = 0;
+      lastReportSentAt = 0;
+      lastRssi = null;
+      lastTxPower = null;
+      rssiSamples = [];
+      activeListener = onAdvertisement;
+      activeAbortController = new AbortController();
       device.addEventListener('advertisementreceived', activeListener);
       try {
-        await device.watchAdvertisements({ signal: activeAbortController.signal });
-        log(`Listening to ${record.name}.`); setStatus(`${record.name} selected`, 'Waiting for BLE advertising packets…', false);
+        await device.watchAdvertisements({
+          signal: activeAbortController.signal
+        });
+        log(`Listening to ${record.name}.`);
+        setStatus(`${record.name} selected`, 'Waiting for BLE advertising packets…', false);
         $('modeToggle').disabled = !initialMode && !getState(record.trackerId)?.trackerMode;
       } catch (error) {
-        activeTracking = false; device.removeEventListener('advertisementreceived', activeListener); activeDevice = null; activeTracker = null;
-        log(`Could not start BLE advertising listener: ${error.message}`); setStatus('BLE listening failed', error.message, false); throw error;
+        activeTracking = false;
+        device.removeEventListener('advertisementreceived', activeListener);
+        activeDevice = null;
+        activeTracker = null;
+        log(`Could not start BLE advertising listener: ${error.message}`);
+        setStatus('BLE listening failed', error.message, false);
+        throw error;
       }
       if (!reportTimer) reportTimer = setInterval(reportActiveTracker, 1000);
-      renderTrackerList(); updateDashboard();
+      renderTrackerList();
+      updateDashboard();
     }
     function stopActiveTracking(sendStop = true) {
-      if (activeTracker && sendStop) sendWs({ type: 'trackerStop', deviceId: activeTracker.deviceId });
-      try { activeAbortController?.abort(); } catch (_) {}
-      if (activeDevice && activeListener) { try { activeDevice.removeEventListener('advertisementreceived', activeListener); } catch (_) {} }
-      try { if (activeDevice?.gatt?.connected) activeDevice.gatt.disconnect(); } catch (_) {}
-      activeAbortController = null; activeListener = null; activeDevice = null; activeTracker = null; activeTracking = false; receiving = false; lastAdvertisementAt = 0; lastRssi = null; lastTxPower = null; rssiSamples = [];
-      renderTrackerList(); updateDashboard();
+      if (activeTracker && sendStop) sendWs({
+        type: 'trackerStop',
+        deviceId: activeTracker.deviceId
+      });
+      try {
+        activeAbortController?.abort();
+      } catch (_) { }
+      if (activeDevice && activeListener) {
+        try {
+          activeDevice.removeEventListener('advertisementreceived', activeListener);
+        } catch (_) { }
+      }
+      try {
+        if (activeDevice?.gatt?.connected) activeDevice.gatt.disconnect();
+      } catch (_) { }
+      activeAbortController = null;
+      activeListener = null;
+      activeDevice = null;
+      activeTracker = null;
+      activeTracking = false;
+      receiving = false;
+      lastAdvertisementAt = 0;
+      lastRssi = null;
+      lastTxPower = null;
+      rssiSamples = [];
+      renderTrackerList();
+      updateDashboard();
     }
-    function estimateBleDistance(rssi) { if (!Number.isFinite(rssi)) return NaN; return Math.pow(10, (CAL_RSSI_1M - rssi) / (10 * PATH_LOSS_EXPONENT)); }
-    function median(values) { const sorted = [...values].sort((a,b)=>a-b), mid = sorted.length >> 1; return sorted.length % 2 ? sorted[mid] : (sorted[mid-1]+sorted[mid])/2; }
+    function estimateBleDistance(rssi) {
+      if (!Number.isFinite(rssi)) return NaN;
+      return Math.pow(10, (CAL_RSSI_1M - rssi) / (10 * PATH_LOSS_EXPONENT));
+    }
+    function median(values) {
+      const sorted = [...values].sort((a, b) => a - b), mid = sorted.length >> 1;
+      return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+    }
     function onAdvertisement(event) {
       if (!activeTracking || !activeTracker) return;
-      lastAdvertisementAt = Date.now(); receiving = true;
-      const rssi = Number(event.rssi); if (Number.isFinite(rssi)) { rssiSamples.push(rssi); while (rssiSamples.length > 20) rssiSamples.shift(); lastRssi = median(rssiSamples); }
+      lastAdvertisementAt = Date.now();
+      receiving = true;
+      const rssi = Number(event.rssi);
+      if (Number.isFinite(rssi)) {
+        rssiSamples.push(rssi);
+        while (rssiSamples.length > 20) rssiSamples.shift();
+        lastRssi = median(rssiSamples);
+      }
       if (Number.isFinite(Number(event.txPower))) lastTxPower = Number(event.txPower);
       const old = getState(activeTracker.trackerId) || {};
-      const state = { ...old, trackerId: activeTracker.trackerId, deviceId: activeTracker.deviceId, trackerName: activeTracker.name, location: myPosition ? { lat: myPosition[0], lng: myPosition[1], accuracy: myAccuracy } : (old.location || null), rssi: Number.isFinite(lastRssi) ? lastRssi : null, txPower: lastTxPower, distanceM: estimateBleDistance(lastRssi), lastBlePacketAt: lastAdvertisementAt, updatedAt: Date.now(), live: true };
-      renderState(state); if (myPosition) reportActiveTracker();
+      const state = {
+        ...old,
+        trackerId: activeTracker.trackerId,
+        deviceId: activeTracker.deviceId,
+        trackerName: activeTracker.name,
+        location: myPosition ? {
+          lat: myPosition[0],
+          lng: myPosition[1],
+          accuracy: myAccuracy
+        } : (old.location || null),
+        rssi: Number.isFinite(lastRssi) ? lastRssi : null,
+        txPower: lastTxPower,
+        distanceM: estimateBleDistance(lastRssi),
+        lastBlePacketAt: lastAdvertisementAt,
+        updatedAt: Date.now(),
+        live: true
+      };
+      renderState(state);
+      if (myPosition) reportActiveTracker();
     }
     function reportActiveTracker() {
       if (!activeTracking || !activeTracker || !receiving || Date.now() - lastAdvertisementAt > TRACKER_TTL_MS || !myPosition) {
         if (activeTracking && lastAdvertisementAt && Date.now() - lastAdvertisementAt > TRACKER_TTL_MS) {
           receiving = false;
           const state = getState(activeTracker?.trackerId);
-          if (state) { state.live = false; updateMarkerStyle(state.trackerId); updateDashboard(); renderTrackerList(); }
-          if (activeTracker && !activeTracker._stopSent) { sendWs({ type: 'trackerStop', deviceId: activeTracker.deviceId }); activeTracker._stopSent = true; }
+          if (state) {
+            state.live = false;
+            updateMarkerStyle(state.trackerId);
+            updateDashboard();
+            renderTrackerList();
+          }
+          if (activeTracker && !activeTracker._stopSent) {
+            sendWs({
+              type: 'trackerStop',
+              deviceId: activeTracker.deviceId
+            });
+            activeTracker._stopSent = true;
+          }
         }
         return;
       }
       activeTracker._stopSent = false;
       const state = getState(activeTracker.trackerId);
       if (Date.now() - lastReportSentAt < 900) return;
-      const sent = sendWs({ type: 'trackerReport', deviceId: activeTracker.deviceId, location: { lat: myPosition[0], lng: myPosition[1], accuracy: Number.isFinite(myAccuracy) ? myAccuracy : null }, rssi: lastRssi, txPower: lastTxPower, distanceM: estimateBleDistance(lastRssi), trackerMode: state?.trackerMode || null, lastBlePacketAt: lastAdvertisementAt });
+      const sent = sendWs({
+        type: 'trackerReport',
+        deviceId: activeTracker.deviceId,
+        location: {
+          lat: myPosition[0],
+          lng: myPosition[1],
+          accuracy: Number.isFinite(myAccuracy) ? myAccuracy : null
+        },
+        rssi: lastRssi,
+        txPower: lastTxPower,
+        distanceM: estimateBleDistance(lastRssi),
+        trackerMode: state?.trackerMode || null,
+        lastBlePacketAt: lastAdvertisementAt
+      });
       lastReportSentAt = Date.now();
     }
     async function setSelectedTrackerMode(mode) {
-      if (!activeTracking || !activeDevice || activeTracker?.trackerId !== selectedTrackerId) { updateDashboard(); return; }
+      if (!activeTracking || !activeDevice || activeTracker?.trackerId !== selectedTrackerId) {
+        updateDashboard();
+        return;
+      }
       const wanted = mode === 'lost' ? 1 : 0;
       const targetDevice = activeDevice;
       const targetListener = activeListener;
       $('modeToggle').disabled = true;
       try {
-        try { activeAbortController?.abort(); } catch (_) {}
+        try {
+          activeAbortController?.abort();
+        } catch (_) { }
         if (targetListener) targetDevice.removeEventListener('advertisementreceived', targetListener);
         const server = await targetDevice.gatt.connect();
         const service = await server.getPrimaryService(SERVICE_UUID);
@@ -500,99 +1510,251 @@
         await new Promise(resolve => setTimeout(resolve, 100));
         const actual = (await characteristic.readValue()).getUint8(0);
         if (actual !== wanted) throw new Error('Tracker did not confirm the requested mode.');
-        const state = { ...(getState(selectedTrackerId) || {}), trackerId: selectedTrackerId, deviceId: activeTracker.deviceId, trackerName: activeTracker.name, trackerMode: mode, updatedAt: Date.now(), live: receiving };
+        const state = {
+          ...(getState(selectedTrackerId) || {}),
+          trackerId: selectedTrackerId,
+          deviceId: activeTracker.deviceId,
+          trackerName: activeTracker.name,
+          trackerMode: mode,
+          updatedAt: Date.now(),
+          live: receiving
+        };
         renderState(state);
         log(`Tracker mode changed to ${mode.toUpperCase()}.`);
       } catch (error) {
         log(`Mode change failed: ${error.message}`);
         alert(`Could not change tracker mode: ${error.message}`);
       } finally {
-        try { if (targetDevice.gatt?.connected) targetDevice.gatt.disconnect(); } catch (_) {}
+        try {
+          if (targetDevice.gatt?.connected) targetDevice.gatt.disconnect();
+        } catch (_) { }
         if (activeTracking && activeDevice === targetDevice && targetListener) {
           await new Promise(resolve => setTimeout(resolve, 350));
           activeAbortController = new AbortController();
           targetDevice.addEventListener('advertisementreceived', targetListener);
-          try { await targetDevice.watchAdvertisements({ signal: activeAbortController.signal }); }
-          catch (error) { log(`BLE listener restart after mode change failed: ${error.message}`); }
+          try {
+            await targetDevice.watchAdvertisements({
+              signal: activeAbortController.signal
+            });
+          }
+          catch (error) {
+            log(`BLE listener restart after mode change failed: ${error.message}`);
+          }
         }
         $('modeToggle').disabled = !(activeTracking && activeTracker?.trackerId === selectedTrackerId);
       }
     }
     async function renameTracker(trackerId) {
-      const record = ownedTrackers.find(t => t.trackerId === trackerId); if (!record) return;
-      const name = prompt('New tracker name:', record.name); if (name === null) return;
-      try { await apiJson('/api/trackers/rename', { method: 'POST', body: JSON.stringify({ trackerId, name }) }); record.name = name.trim(); const state = getState(trackerId); if (state) state.trackerName = record.name; renderTrackerList(); updateDashboard(); }
-      catch (error) { alert(error.message); }
+      const record = ownedTrackers.find(t => t.trackerId === trackerId);
+      if (!record) return;
+      const name = prompt('New tracker name:', record.name);
+      if (name === null) return;
+      try {
+        await apiJson('/api/trackers/rename', {
+          method: 'POST',
+          body: JSON.stringify({
+            trackerId,
+            name
+          })
+        });
+        record.name = name.trim();
+        const state = getState(trackerId);
+        if (state) state.trackerName = record.name;
+        renderTrackerList();
+        updateDashboard();
+      }
+      catch (error) {
+        alert(error.message);
+      }
     }
     async function removeTracker(trackerId) {
-      const record = ownedTrackers.find(t => t.trackerId === trackerId); if (!record) return;
+      const record = ownedTrackers.find(t => t.trackerId === trackerId);
+      if (!record) return;
       if (!confirm(`Remove ${record.name} from this account? Its saved location will also be deleted.`)) return;
       if (activeTracker?.trackerId === trackerId) stopActiveTracking();
       try {
-        await apiJson('/api/trackers/remove', { method: 'POST', body: JSON.stringify({ trackerId }) });
+        await apiJson('/api/trackers/remove', {
+          method: 'POST',
+          body: JSON.stringify({
+            trackerId
+          })
+        });
         ownedTrackers = ownedTrackers.filter(item => item.trackerId !== trackerId);
         sharedStates.delete(trackerId);
-        if (markers.has(trackerId)) { map.removeLayer(markers.get(trackerId)); markers.delete(trackerId); }
-        if (accuracyCircles.has(trackerId)) { map.removeLayer(accuracyCircles.get(trackerId)); accuracyCircles.delete(trackerId); }
-        delete bleDeviceMap[trackerId]; writeBleDeviceMap();
-        if (selectedTrackerId === trackerId) { selectedTrackerId = ownedTrackers[0]?.trackerId || null; if (selectedTrackerId) try { localStorage.setItem(LAST_SELECTED_KEY, selectedTrackerId); } catch (_) {} }
-        renderTrackerList(); updateDashboard();
-      } catch (error) { alert(error.message); }
+        if (markers.has(trackerId)) {
+          map.removeLayer(markers.get(trackerId));
+          markers.delete(trackerId);
+        }
+        if (accuracyCircles.has(trackerId)) {
+          map.removeLayer(accuracyCircles.get(trackerId));
+          accuracyCircles.delete(trackerId);
+        }
+        delete bleDeviceMap[trackerId];
+        writeBleDeviceMap();
+        if (selectedTrackerId === trackerId) {
+          selectedTrackerId = ownedTrackers[0]?.trackerId || null;
+          if (selectedTrackerId) try {
+            localStorage.setItem(LAST_SELECTED_KEY, selectedTrackerId);
+          } catch (_) { }
+        }
+        renderTrackerList();
+        updateDashboard();
+      } catch (error) {
+        alert(error.message);
+      }
     }
 
     async function setAuthMode(mode) {
-      authMode = mode === 'register' ? 'register' : 'login'; const registering = authMode === 'register';
+      authMode = mode === 'register' ? 'register' : 'login';
+      const registering = authMode === 'register';
       $('authTitle').textContent = registering ? 'Create an OpenTag account' : 'Sign in to OpenTag';
       $('authDescription').textContent = registering ? 'Create an account to keep your trackers separate from other users.' : 'Sign in to see the trackers belonging to your account.';
-      $('authSubmit').textContent = registering ? 'Create account' : 'Sign in'; $('authSwitch').textContent = registering ? 'I already have an account' : 'Create account';
+      $('authSubmit').textContent = registering ? 'Create account' : 'Sign in';
+      $('authSwitch').textContent = registering ? 'I already have an account' : 'Create account';
       $('authPassword').setAttribute('autocomplete', registering ? 'new-password' : 'current-password');
     }
     function showSignIn(message = '') {
-      authenticated = false; currentUser = null; $('trackerApp').hidden = true; $('authPanel').hidden = false; $('authError').textContent = message;
-      if (locationWatchId !== null && navigator.geolocation) { navigator.geolocation.clearWatch(locationWatchId); locationWatchId = null; }
-      if (statePollTimer) clearInterval(statePollTimer); statePollTimer = null; if (reportTimer) clearInterval(reportTimer); reportTimer = null;
-      if (reconnectTimer) clearTimeout(reconnectTimer); reconnectTimer = null; try { sharedSocket?.close(); } catch (_) {} sharedSocket = null;
-      stopActiveTracking(false); sharedStates.clear(); for (const marker of markers.values()) map.removeLayer(marker); for (const circle of accuracyCircles.values()) map.removeLayer(circle); markers.clear(); accuracyCircles.clear(); ownedTrackers = []; selectedTrackerId = null; firstMapFitDone = false;
+      authenticated = false;
+      currentUser = null;
+      $('trackerApp').hidden = true;
+      $('authPanel').hidden = false;
+      $('authError').textContent = message;
+      if (locationWatchId !== null && navigator.geolocation) {
+        navigator.geolocation.clearWatch(locationWatchId);
+        locationWatchId = null;
+      }
+      if (statePollTimer) clearInterval(statePollTimer);
+      statePollTimer = null;
+      if (reportTimer) clearInterval(reportTimer);
+      reportTimer = null;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+      try {
+        sharedSocket?.close();
+      } catch (_) { }
+      sharedSocket = null;
+      stopActiveTracking(false);
+      sharedStates.clear();
+      for (const marker of markers.values()) map.removeLayer(marker);
+      for (const circle of accuracyCircles.values()) map.removeLayer(circle);
+      markers.clear();
+      accuracyCircles.clear();
+      ownedTrackers = [];
+      selectedTrackerId = null;
+      firstMapFitDone = false;
       setBackendState('sign in required', false);
     }
     async function activateUser(user) {
-      authenticated = true; currentUser = user; $('currentUsername').textContent = user.username; $('authPanel').hidden = true; $('trackerApp').hidden = false; $('authError').textContent = '';
-      setTimeout(() => map.invalidateSize({ pan: false }), 100); connectBackend(); startLocation(); await refreshSharedState(); startStatePolling();
+      authenticated = true;
+      currentUser = user;
+      $('currentUsername').textContent = user.username;
+      $('authPanel').hidden = true;
+      $('trackerApp').hidden = false;
+      $('authError').textContent = '';
+      setTimeout(() => map.invalidateSize({
+        pan: false
+      }), 100);
+      connectBackend();
+      startLocation();
+      await refreshSharedState();
+      startStatePolling();
       log(`Signed in as ${user.username}.`);
-      const chosen = currentSelectedRecord(); if (chosen) restoreRememberedTracker(chosen);
+      const chosen = currentSelectedRecord();
+      if (chosen) restoreRememberedTracker(chosen);
     }
     async function restoreRememberedTracker(record) {
-      try { const device = await findRememberedDevice(record); if (!device) return; const identity = await readDeviceIdentity(device); if (identity.deviceId !== record.deviceId && !record.legacy) return; await startListening(device, record, identity.mode); log(`Restored Bluetooth permission for ${record.name}.`); }
-      catch (error) { log(`Could not automatically restore ${record.name}: ${error.message}`); }
+      try {
+        const device = await findRememberedDevice(record);
+        if (!device) return;
+        const identity = await readDeviceIdentity(device);
+        if (identity.deviceId !== record.deviceId && !record.legacy) return;
+        await startListening(device, record, identity.mode);
+        log(`Restored Bluetooth permission for ${record.name}.`);
+      }
+      catch (error) {
+        log(`Could not automatically restore ${record.name}: ${error.message}`);
+      }
     }
     async function checkSession() {
-      try { const result = await apiJson('/api/auth/me'); if (result.authenticated && result.user) await activateUser(result.user); else showSignIn(''); }
-      catch (_) { showSignIn('Cannot reach the OpenTag backend. Check the network connection and try again.'); }
+      try {
+        const result = await apiJson('/api/auth/me');
+        if (result.authenticated && result.user) await activateUser(result.user); else showSignIn('');
+      }
+      catch (_) {
+        showSignIn('Cannot reach the OpenTag backend. Check the network connection and try again.');
+      }
     }
 
-    $('menuBtn').addEventListener('click', () => { const menu = $('trackerMenu'); menu.hidden = !menu.hidden; $('menuBtn').setAttribute('aria-expanded', String(!menu.hidden)); });
-    document.addEventListener('click', event => { if (!$('trackerMenu').hidden && !event.target.closest('#trackerMenu') && !event.target.closest('#menuBtn')) { $('trackerMenu').hidden = true; $('menuBtn').setAttribute('aria-expanded', 'false'); } });
+    $('menuBtn').addEventListener('click', () => {
+      const menu = $('trackerMenu');
+      menu.hidden = !menu.hidden;
+      $('menuBtn').setAttribute('aria-expanded', String(!menu.hidden));
+    });
+    document.addEventListener('click', event => {
+      if (!$('trackerMenu').hidden && !event.target.closest('#trackerMenu') && !event.target.closest('#menuBtn')) {
+        $('trackerMenu').hidden = true;
+        $('menuBtn').setAttribute('aria-expanded', 'false');
+      }
+    });
     $('addTrackerBtn').addEventListener('click', addTracker);
     $('modeToggle').addEventListener('change', event => setSelectedTrackerMode(event.target.checked ? 'lost' : 'normal'));
     $('authSwitch').addEventListener('click', () => setAuthMode(authMode === 'login' ? 'register' : 'login'));
     $('authForm').addEventListener('submit', async event => {
-      event.preventDefault(); const username = $('authUsername').value.trim(), password = $('authPassword').value; const endpoint = authMode === 'register' ? '/api/auth/register' : '/api/auth/login';
-      $('authSubmit').disabled = true; $('authError').textContent = authMode === 'register' ? 'Creating account…' : 'Signing in…';
-      try { const result = await apiJson(endpoint, { method: 'POST', body: JSON.stringify({ username, password }) }); $('authPassword').value = ''; await activateUser(result.user); }
-      catch (error) { $('authError').textContent = error.message; }
-      finally { $('authSubmit').disabled = false; }
+      event.preventDefault();
+      const username = $('authUsername').value.trim(), password = $('authPassword').value;
+      const endpoint = authMode === 'register' ? '/api/auth/register' : '/api/auth/login';
+      $('authSubmit').disabled = true;
+      $('authError').textContent = authMode === 'register' ? 'Creating account…' : 'Signing in…';
+      try {
+        const result = await apiJson(endpoint, {
+          method: 'POST',
+          body: JSON.stringify({
+            username,
+            password
+          })
+        });
+        $('authPassword').value = '';
+        await activateUser(result.user);
+      }
+      catch (error) {
+        $('authError').textContent = error.message;
+      }
+      finally {
+        $('authSubmit').disabled = false;
+      }
     });
     $('logoutBtn').addEventListener('click', async () => {
-      try { stopActiveTracking(); await apiJson('/api/auth/logout', { method: 'POST', body: '{}' }); } catch (_) {}
-      showSignIn('You have signed out.'); setAuthMode('login');
+      try {
+        stopActiveTracking();
+        await apiJson('/api/auth/logout', {
+          method: 'POST',
+          body: '{}'
+        });
+      } catch (_) { }
+      showSignIn('You have signed out.');
+      setAuthMode('login');
     });
     document.addEventListener('visibilitychange', async () => {
       if (document.visibilityState !== 'visible' || !activeTracking || !activeDevice || !activeAbortController) return;
       if (Date.now() - lastAdvertisementAt > 5000) {
-        try { await activeDevice.watchAdvertisements({ signal: activeAbortController.signal }); } catch (error) { log(`BLE listener resume failed: ${error.message}`); }
+        try {
+          await activeDevice.watchAdvertisements({
+            signal: activeAbortController.signal
+          });
+        } catch (error) {
+          log(`BLE listener resume failed: ${error.message}`);
+        }
       }
     });
-    window.addEventListener('beforeunload', () => { if (activeTracker) sendWs({ type: 'trackerStop', deviceId: activeTracker.deviceId }); try { sharedSocket?.close(); } catch (_) {} });
+    window.addEventListener('beforeunload', () => {
+      if (activeTracker) sendWs({
+        type: 'trackerStop',
+        deviceId: activeTracker.deviceId
+      });
+      try {
+        sharedSocket?.close();
+      } catch (_) { }
+    });
     setAuthMode('login'); checkSession();
   </script>
 </body>
