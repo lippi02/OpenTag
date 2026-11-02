@@ -1,6 +1,6 @@
 {
   "name": "opentag-backend",
-  "version": "1.2.3",
+  "version": "0.3.0",
   "private": true,
   "description": "OpenTag backend",
   "main": "server.js",
