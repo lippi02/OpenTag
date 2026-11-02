@@ -15,6 +15,7 @@ services:
       REGISTRATION_ENABLED: "true"
       AUTH_FILE: /data/auth.json
       DATA_FILE: /data/lastknown.json
+      TRACKERS_FILE: /data/trackers.json
     ports:
       - "192.168.1.101:3000:3000"
     volumes:

@@ -5,6 +5,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 
+const APP_VERSION = '2.0.0';
 const HOST = process.env.HOST || '0.0.0.0';
 const PORT = Number(process.env.PORT || 3000);
 const WS_PATH = process.env.WS_PATH || '/ws';
@@ -15,6 +16,7 @@ const MAX_TRACKERS_PER_USER = 100;
 const PING_INTERVAL_MS = Number(process.env.PING_INTERVAL_MS || 25000);
 const DATA_FILE = process.env.DATA_FILE || '';
 const AUTH_FILE = process.env.AUTH_FILE || (DATA_FILE ? path.join(path.dirname(DATA_FILE), 'auth.json') : '');
+const TRACKERS_FILE = process.env.TRACKERS_FILE || (DATA_FILE ? path.join(path.dirname(DATA_FILE), 'trackers.json') : '');
 const REGISTRATION_ENABLED = String(process.env.REGISTRATION_ENABLED || 'true').toLowerCase() !== 'false';
 const SESSION_COOKIE = 'opentag_session';
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -27,6 +29,7 @@ const users = new Map();
 const sessions = new Map();
 const trackerStates = new Map();
 const lastKnown = new Map();
+const ownedTrackers = new Map();
 const clients = new Set();
 const authRateLimits = new Map();
 let saveTimer = null;
@@ -209,6 +212,187 @@ function loadUsers() {
     if (error.code !== 'ENOENT') console.error(`Could not load account database: ${error.message}`);
   }
 }
+function saveTrackers() {
+  if (!TRACKERS_FILE) {
+    console.warn('TRACKERS_FILE is not configured; tracker registry will be memory-only.');
+    return;
+  }
+  const tmp = `${TRACKERS_FILE}.tmp`;
+  try {
+    fs.mkdirSync(path.dirname(TRACKERS_FILE), { recursive: true });
+    fs.writeFileSync(tmp, JSON.stringify({ version: 2, trackers: [...ownedTrackers.values()] }), { mode: 0o600 });
+    fs.renameSync(tmp, TRACKERS_FILE);
+  } catch (error) {
+    console.error(`Could not save tracker registry ${TRACKERS_FILE}: ${error.message}`);
+    throw new Error('Could not save tracker registry. Check that the persistent data directory is writable.');
+  }
+}
+function loadTrackers() {
+  if (!TRACKERS_FILE) {
+    console.warn('TRACKERS_FILE is not configured; tracker registry will be memory-only.');
+    return;
+  }
+  try {
+    const parsed = JSON.parse(fs.readFileSync(TRACKERS_FILE, 'utf8'));
+    for (const item of Array.isArray(parsed.trackers) ? parsed.trackers : []) {
+      if (!item || typeof item.trackerId !== 'string' || typeof item.userId !== 'string' ||
+          typeof item.deviceId !== 'string' || typeof item.name !== 'string') continue;
+      ownedTrackers.set(item.trackerId, item);
+    }
+    console.log(`Loaded ${ownedTrackers.size} registered tracker(s) from ${TRACKERS_FILE}`);
+  } catch (error) {
+    if (error.code !== 'ENOENT') console.error(`Could not load tracker registry: ${error.message}`);
+  }
+}
+function publicTracker(record) {
+  const { userId, ...safe } = record;
+  return safe;
+}
+function trackersForUser(userId) {
+  return [...ownedTrackers.values()]
+    .filter(item => item.userId === userId)
+    .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0))
+    .map(publicTracker);
+}
+function findTrackerForUser(userId, deviceIdOrName) {
+  const value = clampText(deviceIdOrName, 128);
+  if (!value) return null;
+  const exact = ownedTrackers.get(scopedTrackerId(userId, value));
+  if (exact) return exact;
+  return [...ownedTrackers.values()].find(item => item.userId === userId && item.name === value) || null;
+}
+function ensureLegacyTrackerRecords() {
+  let changed = false;
+  for (const [oldKey, state] of [...lastKnown.entries()]) {
+    if (!state.userId) continue;
+    if ([...ownedTrackers.values()].some(item => item.userId === state.userId && item.trackerId === oldKey)) continue;
+    const prefix = `${state.userId}:`;
+    const legacyName = oldKey.startsWith(prefix) ? oldKey.slice(prefix.length) : (state.trackerName || oldKey);
+    const deviceId = `legacy-${legacyName.replace(/[^a-zA-Z0-9._-]/g, '-').slice(0, 80)}`;
+    const newKey = scopedTrackerId(state.userId, deviceId);
+    const record = {
+      trackerId: newKey,
+      deviceId,
+      userId: state.userId,
+      name: clampText(state.trackerName || legacyName, 48) || 'OpenTag tracker',
+      createdAt: state.updatedAt || now(),
+      updatedAt: now(),
+      legacy: true,
+    };
+    ownedTrackers.set(newKey, record);
+    lastKnown.delete(oldKey);
+    lastKnown.set(newKey, { ...state, trackerId: newKey, deviceId, trackerName: record.name, userId: state.userId, live: false });
+    changed = true;
+  }
+  if (changed) {
+    saveTrackers();
+    scheduleSave();
+    console.log('Migrated previously saved tracker positions into the v2 tracker registry.');
+  }
+}
+function migrateLegacyNamedTracker(userId, name, deviceId) {
+  const normalizedName = name.toLowerCase();
+  const legacy = [...ownedTrackers.values()].find(item => item.userId === userId && item.legacy &&
+    (item.name.toLowerCase() === normalizedName || normalizedName.startsWith(`${item.name.toLowerCase()}-`)));
+  if (!legacy) return null;
+  const oldKey = legacy.trackerId;
+  const newKey = scopedTrackerId(userId, deviceId);
+  ownedTrackers.delete(oldKey);
+  const updated = { ...legacy, trackerId: newKey, deviceId, legacy: false, updatedAt: now() };
+  ownedTrackers.set(newKey, updated);
+  const previous = lastKnown.get(oldKey);
+  if (previous) {
+    lastKnown.delete(oldKey);
+    lastKnown.set(newKey, { ...previous, trackerId: newKey, deviceId, trackerName: name });
+    scheduleSave();
+  }
+  const live = trackerStates.get(oldKey);
+  if (live) {
+    trackerStates.delete(oldKey);
+    trackerStates.set(newKey, { ...live, trackerId: newKey, deviceId, trackerName: name });
+  }
+  return updated;
+}
+function registerTracker(user, body) {
+  const deviceId = clampText(body.deviceId, 128);
+  const name = clampText(body.name || 'OpenTag tracker', 48);
+  if (!/^[a-zA-Z0-9._:-]{6,128}$/.test(deviceId)) {
+    const error = new Error('Invalid tracker hardware ID. Update the tracker firmware and try again.');
+    error.statusCode = 400;
+    throw error;
+  }
+  if (!name) {
+    const error = new Error('Tracker name is required.');
+    error.statusCode = 400;
+    throw error;
+  }
+  const globalOwner = [...ownedTrackers.values()].find(item => item.deviceId === deviceId);
+  if (globalOwner && globalOwner.userId !== user.id) {
+    const error = new Error('This tracker is already registered to another account.');
+    error.statusCode = 409;
+    throw error;
+  }
+  let record = ownedTrackers.get(scopedTrackerId(user.id, deviceId));
+  if (!record) record = migrateLegacyNamedTracker(user.id, name, deviceId);
+  if (record) {
+    record.name = name;
+    record.updatedAt = now();
+  } else {
+    const count = [...ownedTrackers.values()].filter(item => item.userId === user.id).length;
+    if (count >= MAX_TRACKERS_PER_USER) {
+      const error = new Error(`This account can register up to ${MAX_TRACKERS_PER_USER} trackers.`);
+      error.statusCode = 409;
+      throw error;
+    }
+    const trackerId = scopedTrackerId(user.id, deviceId);
+    record = { trackerId, deviceId, userId: user.id, name, createdAt: now(), updatedAt: now(), legacy: false };
+    ownedTrackers.set(trackerId, record);
+  }
+  saveTrackers();
+  return publicTracker(record);
+}
+function renameTracker(user, body) {
+  const trackerId = clampText(body.trackerId, 160);
+  const name = clampText(body.name, 48);
+  const record = ownedTrackers.get(trackerId);
+  if (!record || record.userId !== user.id) {
+    const error = new Error('Tracker not found in this account.');
+    error.statusCode = 404;
+    throw error;
+  }
+  if (!name) {
+    const error = new Error('Tracker name is required.');
+    error.statusCode = 400;
+    throw error;
+  }
+  record.name = name;
+  record.updatedAt = now();
+  for (const stateMap of [trackerStates, lastKnown]) {
+    const state = stateMap.get(trackerId);
+    if (state) state.trackerName = name;
+  }
+  saveTrackers();
+  scheduleSave();
+  broadcastToUser(user.id, { type: 'trackerRenamed', trackerId, name });
+  return publicTracker(record);
+}
+function deleteTracker(user, body) {
+  const trackerId = clampText(body.trackerId, 160);
+  const record = ownedTrackers.get(trackerId);
+  if (!record || record.userId !== user.id) {
+    const error = new Error('Tracker not found in this account.');
+    error.statusCode = 404;
+    throw error;
+  }
+  ownedTrackers.delete(trackerId);
+  trackerStates.delete(trackerId);
+  lastKnown.delete(trackerId);
+  saveTrackers();
+  scheduleSave();
+  broadcastToUser(user.id, { type: 'trackerDeleted', trackerId });
+  return true;
+}
+
 function sanitizeLocation(location) {
   if (!location || !validLatitude(location.lat) || !validLongitude(location.lng)) return null;
   const accuracy = finiteNumber(location.accuracy);
@@ -248,13 +432,16 @@ function migrateLegacyPositionsToFirstUser(userId) {
   for (const [oldId, item] of [...lastKnown.entries()]) {
     if (item.userId) continue;
     const rawId = clampText(item.trackerName || item.trackerId || oldId, 100);
-    const newId = scopedTrackerId(userId, rawId);
+    const deviceId = `legacy-${rawId.replace(/[^a-zA-Z0-9._-]/g, '-').slice(0, 80)}`;
+    const newId = scopedTrackerId(userId, deviceId);
     lastKnown.delete(oldId);
-    lastKnown.set(newId, { ...item, trackerId: newId, trackerName: item.trackerName || rawId, userId, live: false });
+    lastKnown.set(newId, { ...item, trackerId: newId, deviceId, trackerName: item.trackerName || rawId, userId, live: false });
+    ownedTrackers.set(newId, { trackerId: newId, deviceId, userId, name: clampText(item.trackerName || rawId, 48), createdAt: item.updatedAt || now(), updatedAt: now(), legacy: true });
     changed = true;
   }
   if (changed) {
     console.log(`Migrated legacy unowned position(s) to the first account (${userId}).`);
+    saveTrackers();
     scheduleSave();
   }
 }
@@ -287,18 +474,19 @@ function stateSnapshot(userId) {
   return states;
 }
 function sanitizeReport(message, client) {
-  const rawTrackerId = clampText(message.trackerId, 100);
-  const trackerName = clampText(message.trackerName || rawTrackerId, 100);
-  if (!rawTrackerId) throw new Error('trackerId is required');
-  const trackerId = scopedTrackerId(client.userId, rawTrackerId);
+  const rawDeviceId = clampText(message.deviceId || message.trackerId, 128);
+  if (!rawDeviceId) throw new Error('deviceId is required');
+  const record = findTrackerForUser(client.userId, rawDeviceId);
+  if (!record) throw new Error('This tracker is not registered to your account. Add it from the tracker menu first.');
   const rssi = finiteNumber(message.rssi);
   const txPower = finiteNumber(message.txPower);
   const distanceM = finiteNumber(message.distanceM);
   const location = sanitizeLocation(message.location);
   const trackerMode = ['normal', 'lost'].includes(message.trackerMode) ? message.trackerMode : null;
   return {
-    trackerId,
-    trackerName,
+    trackerId: record.trackerId,
+    deviceId: record.deviceId,
+    trackerName: record.name,
     location,
     rssi: rssi !== null && rssi >= -150 && rssi <= 0 ? rssi : null,
     txPower: txPower !== null && txPower >= -100 && txPower <= 30 ? txPower : null,
@@ -340,7 +528,9 @@ function broadcastToUser(userId, message) {
   }
 }
 function removeTrackerForClient(client, rawTrackerId) {
-  const trackerId = scopedTrackerId(client.userId, rawTrackerId);
+  const record = findTrackerForUser(client.userId, rawTrackerId);
+  if (!record) return false;
+  const trackerId = record.trackerId;
   const state = trackerStates.get(trackerId);
   if (!state || state.userId !== client.userId || state.reporterId !== client.clientId) return false;
   trackerStates.delete(trackerId);
@@ -354,11 +544,12 @@ function removeTrackerForClient(client, rawTrackerId) {
 function handleMessage(client, message) {
   if (!message || typeof message !== 'object') return;
   if (message.type === 'hello') {
-    sendJson(client, { type: 'helloAck', clientId: client.clientId, serverTime: now() });
+    sendJson(client, { type: 'helloAck', clientId: client.clientId, appVersion: APP_VERSION, serverTime: now() });
     sendJson(client, {
       type: 'snapshot',
       trackers: stateSnapshot(client.userId),
       lastKnown: lastKnownSnapshot(client.userId),
+      ownedTrackers: trackersForUser(client.userId),
       serverTime: now(),
     });
     return;
@@ -386,7 +577,7 @@ function handleMessage(client, message) {
     return;
   }
   if (message.type === 'trackerStop') {
-    const rawTrackerId = clampText(message.trackerId, 100);
+    const rawTrackerId = clampText(message.deviceId || message.trackerId, 128);
     if (rawTrackerId) removeTrackerForClient(client, rawTrackerId);
     return;
   }
@@ -591,7 +782,7 @@ const server = http.createServer(async (request, response) => {
   const url = new URL(request.url, `http://${request.headers.host || 'localhost'}`);
   try {
     if (request.method === 'GET' && url.pathname === '/api/health') {
-      return jsonResponse(response, 200, { ok: true, service: 'opentag-backend', time: now() });
+      return jsonResponse(response, 200, { ok: true, service: 'opentag-backend', version: APP_VERSION, time: now() });
     }
     if (request.method === 'GET' && url.pathname === '/api/auth/me') {
       const user = getSessionUser(request);
@@ -601,12 +792,37 @@ const server = http.createServer(async (request, response) => {
     if (request.method === 'POST' && url.pathname === '/api/auth/login') return await loginAccount(request, response);
     if (request.method === 'POST' && url.pathname === '/api/auth/logout') return logoutAccount(request, response);
 
+    if (url.pathname.startsWith('/api/trackers')) {
+      const user = getSessionUser(request);
+      if (!user) return jsonResponse(response, 401, { error: 'Authentication required.' });
+      if (request.method === 'GET' && url.pathname === '/api/trackers') {
+        return jsonResponse(response, 200, { trackers: trackersForUser(user.id), serverTime: now() });
+      }
+      if (request.method === 'POST' && url.pathname === '/api/trackers/add') {
+        const body = await readJsonBody(request);
+        const tracker = registerTracker(user, body);
+        return jsonResponse(response, 201, { ok: true, tracker });
+      }
+      if (request.method === 'POST' && url.pathname === '/api/trackers/rename') {
+        const body = await readJsonBody(request);
+        const tracker = renameTracker(user, body);
+        return jsonResponse(response, 200, { ok: true, tracker });
+      }
+      if (request.method === 'POST' && url.pathname === '/api/trackers/remove') {
+        const body = await readJsonBody(request);
+        deleteTracker(user, body);
+        return jsonResponse(response, 200, { ok: true });
+      }
+      return jsonResponse(response, 404, { error: 'Not found' });
+    }
+
     if (request.method === 'GET' && url.pathname === '/api/state') {
       const user = getSessionUser(request);
       if (!user) return jsonResponse(response, 401, { error: 'Authentication required.' });
       const body = {
         trackers: stateSnapshot(user.id),
         lastKnown: lastKnownSnapshot(user.id),
+        ownedTrackers: trackersForUser(user.id),
         serverTime: now(),
       };
       return jsonResponse(response, 200, body, { 'Cache-Control': 'no-store, no-cache, must-revalidate', Pragma: 'no-cache', Expires: '0' });
@@ -651,13 +867,16 @@ setInterval(() => {
 }, PING_INTERVAL_MS).unref();
 
 loadUsers();
+loadTrackers();
 loadLastKnown();
+ensureLegacyTrackerRecords();
 
 server.listen(PORT, HOST, () => {
-  console.log(`OpenTag Phase 2 backend listening on http://${HOST}:${PORT}`);
+  console.log(`OpenTag v2.0.0 multi-tracker backend listening on http://${HOST}:${PORT}`);
   console.log(`WebSocket endpoint: ${WS_PATH}`);
   console.log(`Tracker state TTL: ${TRACKER_TTL_MS} ms`);
   console.log(`Account registration: ${REGISTRATION_ENABLED ? 'enabled' : 'disabled'}`);
   console.log(`Authentication database: ${AUTH_FILE || 'none (memory only)'}`);
   console.log(`Last known positions file: ${DATA_FILE || 'none (memory only)'}`);
+  console.log(`Tracker registry file: ${TRACKERS_FILE || 'none (memory only)'}`);
 });

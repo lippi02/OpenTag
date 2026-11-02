@@ -2,24 +2,25 @@
 This is my project of creating and developing an opensource bluetooth tracker solution. It is developed on a seed studio XIAO-nRF52840 board. I don't know if it works on any other, I didn't have time and money to test it. I would appreciate if you tested it, you send me a feedback of your results.\
 Same goes for browsers. Chromium browsers will 100% work, but I don't know what features need to be enabled for it in any other browsers.
 
-# How to use it:
+# How to just use it:
  1. Download the latest [release](https://github.com/lippi02/OpenTag/releases)
  2. Unpack the downloaded ZIP file
+
+## Firmware Setup
  3. Download and Install Arduino IDE
- 4. Install Seeed nRF52 Boards by Seeed Studio
- 5. Connect your board to your PC and Upload the code
- 6. Open Google Chrome
- 7. Go to: chrome://flags/#enable-experimental-web-platform-features and Enable it.\
-(Task 1 to 7 needs to be done only at the first time setup)
+ 4. Install the Seeed nRF52 Boards package.
+ 5. Open `firmware/OpenTag.ino`.
+ 6. Select Seeed XIAO nRF52840 and upload the sketch.
+ 7. Flash this firmware to each tracker you want to identify consistently across browsers/devices.
 
-# LocalHost option
- 9. Open a CMD inside the unzipped folder and run: python -m http.server 8000
- 10. Go back to Chrome and open: http://localhost:8000/
- 11. If you did everything correctly it should show you a map and some set up buttons
- 12. Enable location and connect to your device
- 13. They should show up on the map and ready to go
+## Browser Setup
+ 8. Open a Chromium-base browser
+ 9. Go to: chrome://flags/#enable-experimental-web-platform-features and Enable it.
+ 10. Grant location permission to display the current phone location and calculate distance to tracker-reporter locations.
+ 11. Use **Add tracker** in the hamburger menu. The browser opens a Bluetooth chooser; choose one OpenTag device. Repeat for each tracker.\
+(The current browser listens to one selected tracker at a time. Use a tracker's **Connect** button to switch the active BLE listener. All registered trackers and their last-known positions remain on the map.)
 
-# Hosting it from TrueNAS
+# Hosting your own from TrueNAS
  9. Install NGINX Proxy Manager Plus (Use Host Path, instead of ixVolume)
  10. Create a Custom App for the backend (Discover Apps, 3 dot, Install via YML) using the truenas-custom-app.yaml
  11. Create a DDNS (I used [No-IP](noip.com), but you can use whatever you want)
