@@ -1,7 +1,10 @@
 #include <bluefruit.h>
+#include <nrf.h>
+#include <stdio.h>
 
 BLEService controlService("19b10000-e8f2-537e-4f6c-d104768a1214");
 BLECharacteristic modeCharacteristic("19b10001-e8f2-537e-4f6c-d104768a1214");
+BLECharacteristic trackerIdCharacteristic("19b10002-e8f2-537e-4f6c-d104768a1214");
 
 volatile bool restartAdvertisingPending = false;
 volatile bool lostMode = false;
@@ -86,7 +89,7 @@ void mode_write_callback(uint16_t conn_hdl, BLECharacteristic* chr,
 void setup()
 {
   pinMode(LED_BUILTIN, OUTPUT);
-  digitalWrite(LED_BUILTIN, HIGH);   // XIAO LED is active-low: HIGH = off
+  digitalWrite(LED_BUILTIN, HIGH);
 
   Serial.begin(115200);
   delay(300);
@@ -94,12 +97,24 @@ void setup()
   Bluefruit.autoConnLed(false);
 
   Bluefruit.begin(1, 0);
-  Bluefruit.setName("OpenTag-Test");
 
   Bluefruit.Periph.setConnectCallback(connect_callback);
   Bluefruit.Periph.setDisconnectCallback(disconnect_callback);
 
   controlService.begin();
+
+  char trackerId[17];
+  snprintf(trackerId, sizeof(trackerId), "%08lx%08lx",
+           (unsigned long)NRF_FICR->DEVICEID[0],
+           (unsigned long)NRF_FICR->DEVICEID[1]);
+  char bleName[24];
+  snprintf(bleName, sizeof(bleName), "OpenTag-Test-%s", trackerId + 10);
+  Bluefruit.setName(bleName);
+  trackerIdCharacteristic.setProperties(CHR_PROPS_READ);
+  trackerIdCharacteristic.setPermission(SECMODE_OPEN, SECMODE_NO_ACCESS);
+  trackerIdCharacteristic.setFixedLen(16);
+  trackerIdCharacteristic.begin();
+  trackerIdCharacteristic.write((uint8_t*)trackerId, 16);
 
   modeCharacteristic.setProperties(CHR_PROPS_READ | CHR_PROPS_WRITE);
   modeCharacteristic.setPermission(SECMODE_OPEN, SECMODE_OPEN);
