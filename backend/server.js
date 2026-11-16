@@ -1,1193 +1,1069 @@
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <meta name="theme-color" content="#0b0f14" />
-  <title>OpenTag Tracker</title>
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
-    integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
-  <style>
-    :root{color-scheme:dark;--bg:#0b0f14;--panel:#121821;--panel2:#19212c;--text:#eef2f7;--muted:#9aa7b5;--border:#273241;--accent:#6ea8fe;--ok:#56d364;--warn:#e3b341;--orange:#f97316}
-    *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
-    button,input{font:inherit;color:var(--text);background:var(--panel2);border:1px solid var(--border);border-radius:10px}button{cursor:pointer;padding:10px 13px}button:hover{border-color:var(--accent)}button:disabled{opacity:.45;cursor:not-allowed}button.primary{background:var(--accent);border-color:var(--accent);color:#07111f;font-weight:750}button.ghost{background:transparent}
-    .app-shell{width:min(1500px,calc(100% - 24px));margin:0 auto;padding:12px 0 24px}.app-header{display:flex;align-items:center;gap:12px;min-height:58px;margin-bottom:12px;position:relative}
-    .brand{display:flex;align-items:center;min-width:0}.brand h1{font-size:clamp(23px,3vw,34px);line-height:1;margin:0;white-space:nowrap}.menu-button{width:44px;height:44px;padding:0;display:grid;place-items:center;background:var(--panel);flex:0 0 auto}.menu-button svg{width:23px;height:23px}.header-spacer{flex:1}
-    .mode-control{display:flex;align-items:center;gap:10px;background:var(--panel);border:1px solid var(--border);border-radius:11px;padding:7px 10px;flex:0 0 auto}.mode-label{min-width:74px;font-size:12px;font-weight:700}.switch{position:relative;width:48px;height:26px;display:inline-block}.switch input{opacity:0;width:0;height:0}.switch-track{position:absolute;inset:0;border-radius:99px;background:#374151;cursor:pointer;transition:.15s}.switch-track:before{content:"";position:absolute;width:18px;height:18px;top:4px;left:4px;border-radius:50%;background:white;transition:.15s}.switch input:checked+.switch-track{background:#d4a900}.switch input:checked+.switch-track:before{transform:translateX(22px)}.switch input:disabled+.switch-track{opacity:.4;cursor:not-allowed}
-    .account-bar{display:flex;align-items:center;gap:9px;padding:6px 8px 6px 11px;border:1px solid var(--border);border-radius:11px;background:var(--panel);white-space:nowrap}.account-bar span{font-size:12px;color:var(--muted)}.account-bar strong{color:var(--text)}.account-bar button{padding:7px 10px;font-size:12px}
-    .tracker-menu{position:absolute;z-index:1200;left:0;top:54px;width:min(390px,calc(100vw - 30px));max-height:min(72vh,680px);overflow:auto;background:#111821;border:1px solid #344253;border-radius:15px;padding:14px;box-shadow:0 18px 55px rgba(0,0,0,.55)}.tracker-menu[hidden]{display:none}.menu-heading{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:12px}.menu-heading h2{font-size:17px;margin:0}.menu-heading button{padding:8px 10px;font-size:12px}.tracker-list{display:grid;gap:8px}.tracker-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;padding:9px;background:var(--panel2);border:1px solid var(--border);border-radius:11px}.tracker-select{display:flex;align-items:center;gap:9px;min-width:0;text-align:left;background:transparent;border:0;padding:2px}.tracker-select:hover{border:0}.tracker-row.selected{border-color:var(--accent);box-shadow:inset 0 0 0 1px rgba(110,168,254,.25)}.tracker-row-main{min-width:0}.tracker-name{display:block;font-size:13px;font-weight:750;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.tracker-sub{display:block;font-size:11px;color:var(--muted);margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.tracker-status-dot{width:10px;height:10px;border-radius:50%;flex:0 0 auto;background:#f97316;box-shadow:0 0 0 3px rgba(249,115,22,.12)}.tracker-status-dot.online{background:#facc15;box-shadow:0 0 0 3px rgba(250,204,21,.12)}.tracker-row-actions{display:flex;align-items:center;gap:5px}.tracker-row-actions button{font-size:11px;padding:7px 8px}.menu-empty{padding:18px 10px;text-align:center;color:var(--muted);font-size:13px;background:var(--panel2);border-radius:10px}.menu-hint{font-size:11px;color:var(--muted);line-height:1.5;margin:12px 2px 2px}
-    .pill{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--border);background:var(--panel2);border-radius:999px;padding:5px 9px;font-size:11px;color:var(--muted)}
-    .grid{display:grid;grid-template-columns:320px minmax(0,1fr);gap:14px}.panel{min-width:0;background:var(--panel);border:1px solid var(--border);border-radius:15px;padding:15px;box-shadow:0 10px 30px rgba(0,0,0,.16)}.panel h2{font-size:15px;margin:0 0 12px}.status{display:flex;align-items:center;gap:10px;padding:11px;border-radius:11px;background:var(--panel2);margin-bottom:14px}.status-dot{width:10px;height:10px;background:#f85149;border-radius:50%;box-shadow:0 0 0 4px rgba(248,81,73,.12);flex:0 0 auto}.status-dot.online{background:#facc15;box-shadow:0 0 0 4px rgba(250,204,21,.13)}.status strong{font-size:13px}.status-sub{font-size:11px;color:var(--muted);margin-top:3px;line-height:1.4}.metric-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:10px 0 14px}.metric{min-height:70px;border-radius:10px;padding:10px;background:var(--panel2);min-width:0}.metric-label{font-size:10px;color:var(--muted);margin-bottom:6px}.metric-value{font-size:17px;font-weight:750;overflow-wrap:anywhere}.legend{display:flex;flex-wrap:wrap;gap:7px;margin-top:8px}.log{margin-top:15px;max-height:150px;overflow:auto;background:#090d12;border:1px solid var(--border);border-radius:10px;padding:9px 10px;font:10px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;white-space:pre-wrap;color:#c8d6e5}
-    #map{height:calc(100vh - 150px);min-height:520px;max-height:900px;border-radius:11px;overflow:hidden;background:#dfe7ef}.map-panel{padding:8px}
-    .auth-panel{max-width:520px;margin:9vh auto 0}.auth-panel h2{margin:0 0 8px;font-size:20px}.auth-panel p{color:var(--muted);line-height:1.5}.auth-panel label{display:block;color:var(--muted);font-size:13px;margin:12px 0 6px}.auth-panel input{width:100%;padding:11px}.auth-error{min-height:1.4em;color:#ff8c82;font-size:13px;margin-top:8px}.auth-actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:12px}.auth-actions button{flex:1 1 150px}.hint{font-size:11px;color:var(--muted);line-height:1.5;margin-top:12px}
-    #trackerApp[hidden],#authPanel[hidden]{display:none!important}.leaflet-popup-content-wrapper,.leaflet-popup-tip{background:#17212c;color:#eef2f7}.leaflet-popup-content{line-height:1.55}.leaflet-container a{color:#8ab9ff}
-    @media(max-width:900px){.grid{grid-template-columns:1fr}#map{height:60vh;min-height:430px}.app-header{flex-wrap:wrap}.header-spacer{flex:1}.account-bar{margin-left:auto}.mode-control{order:3}.tracker-menu{top:52px}}
-    @media(max-width:520px){.app-shell{width:calc(100% - 16px);padding-top:8px}.brand h1{font-size:22px}.account-bar{gap:5px;padding:5px 6px}.account-bar span{font-size:10px}.account-bar button{font-size:10px;padding:6px}.mode-control{padding:6px 8px}.grid{gap:9px}.panel{padding:12px}#map{min-height:400px}}
-  </style>
-</head>
-<body>
-  <div class="app-shell">
-    <section id="authPanel" class="panel auth-panel">
-      <h2 id="authTitle">Sign in to OpenTag</h2>
-      <p id="authDescription">Sign in to see the trackers belonging to your account.</p>
-      <form id="authForm" autocomplete="on">
-        <label for="authUsername">Username</label>
-        <input id="authUsername" name="username" type="text" autocomplete="username" minlength="3" maxlength="32" required />
-        <label for="authPassword">Password</label>
-        <input id="authPassword" name="password" type="password" autocomplete="current-password" maxlength="128" required />
-        <div id="authError" class="auth-error" role="status" aria-live="polite"></div>
-        <div class="auth-actions"><button id="authSubmit" class="primary" type="submit">Sign in</button><button id="authSwitch" class="ghost" type="button">Create account</button></div>
-      </form>
-      <p class="hint">Your tracker locations are private to your account. Use a unique password and do not share your login.</p>
-    </section>
+'use strict';
 
-    <div id="trackerApp" hidden>
-      <header class="app-header">
-        <button id="menuBtn" class="menu-button" type="button" aria-label="Open tracker menu" aria-expanded="false">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
-        </button>
-        <div class="brand">
-          <h1>OpenTag Tracker</h1>
-        </div>
-        <div class="mode-control" title="Controls the selected tracker when this browser is connected to it">
-          <span id="modeLabel" class="mode-label">Mode unknown</span>
-          <label class="switch"><input id="modeToggle" type="checkbox" disabled><span class="switch-track"></span></label>
-        </div>
-        <div class="header-spacer"></div>
-        <div class="account-bar"><span>Signed in as <strong id="currentUsername">–</strong></span><button id="logoutBtn" class="ghost" type="button">Sign out</button></div>
-        <div id="trackerMenu" class="tracker-menu" hidden>
-          <div class="menu-heading"><h2>My Trackers</h2><button id="addTrackerBtn" class="primary" type="button">+ Add tracker</button></div>
-          <div id="trackerList" class="tracker-list"><div class="menu-empty">Loading trackers…</div></div>
-          <p class="menu-hint">The map shows every saved tracker. This browser listens to one selected tracker at a time; other devices signed into your account can report the remaining trackers.</p>
-        </div>
-      </header>
+const http = require('node:http');
+const crypto = require('node:crypto');
+const fs = require('node:fs');
+const path = require('node:path');
 
+const APP_VERSION = (() => { try { return require('./package.json').version; } catch (_) { return 'dev'; } })();
+const HOST = process.env.HOST || '0.0.0.0';
+const PORT = Number(process.env.PORT || 3000);
+const WS_PATH = process.env.WS_PATH || '/ws';
+const TRACKER_TTL_MS = Number(process.env.TRACKER_TTL_MS || 15000);
+const MAX_MESSAGE_BYTES = 32 * 1024;
+const MAX_BODY_BYTES = 8 * 1024;
+const MAX_TRACKERS_PER_USER = 100;
+const PING_INTERVAL_MS = Number(process.env.PING_INTERVAL_MS || 25000);
+const DATA_FILE = process.env.DATA_FILE || '';
+const AUTH_FILE = process.env.AUTH_FILE || (DATA_FILE ? path.join(path.dirname(DATA_FILE), 'auth.json') : '');
+const TRACKERS_FILE = process.env.TRACKERS_FILE || (DATA_FILE ? path.join(path.dirname(DATA_FILE), 'trackers.json') : '');
+const REGISTRATION_ENABLED = String(process.env.REGISTRATION_ENABLED || 'true').toLowerCase() !== 'false';
+const SESSION_COOKIE = 'opentag_session';
+const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const USERNAME_RE = /^[a-zA-Z0-9._-]{3,32}$/;
+const PASSWORD_MIN_LENGTH = Math.max(0, Number(process.env.PASSWORD_MIN_LENGTH ?? 10) || 0);
+const PASSWORD_MAX_LENGTH = 128;
+const SCRYPT_KEY_LENGTH = 64;
+const scryptAsync = require('node:util').promisify(crypto.scrypt);
+const TRUSTED_PROXY_HOPS = Math.max(0, Number(process.env.TRUSTED_PROXY_HOPS ?? 1) || 0);
+const STATIC_DIR = process.env.STATIC_DIR ? path.resolve(process.env.STATIC_DIR) : '';
+const MAX_WS_BACKLOG_BYTES = 1024 * 1024;
+const RATE_WINDOW_MS = 15 * 60 * 1000;
+const MAX_DEVICE_ID_LENGTH = 100;
+const STATIC_MIME = {
+  '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
+  '.json': 'application/json; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon',
+};
 
-      <main class="grid">
-        <section class="panel">
-          <div class="status"><span id="statusDot" class="status-dot"></span><div><strong id="statusText">No tracker selected</strong><div id="statusSub" class="status-sub">Add a tracker to your account.</div></div></div>
-          <h2 id="selectedTrackerTitle">Tracker data</h2>
-          <div class="metric-grid">
-            <div class="metric"><div class="metric-label">Name</div><div id="deviceName" class="metric-value">–</div></div>
-            <div class="metric"><div class="metric-label">GPS Distance</div><div id="gpsDistance" class="metric-value">–</div></div>
-            <div class="metric"><div class="metric-label">Estimated Distance</div><div id="distance" class="metric-value">–</div></div>
-            <div class="metric"><div class="metric-label">Transmission Power</div><div id="txPower" class="metric-value">–</div></div>
-            <div class="metric"><div class="metric-label">Last BLE Packet</div><div id="lastSeen" class="metric-value">–</div></div>
-            <div class="metric" title="GPS accuracy reported by the device that most recently supplied this tracker's location."><div class="metric-label">Reporter GPS Accuracy</div><div id="accuracy" class="metric-value">–</div></div>
-          </div>
-          <div class="legend"><span class="pill">🔵 Own position</span><span class="pill" id="trackerPill">🟠 Tracker: offline</span><span class="pill" id="backendLegend">⚪ Shared backend</span></div>
-          <div id="log" class="log"></div>
-        </section>
-        <section class="panel map-panel"><div id="map"></div></section>
-      </main>
-    </div>
-  </div>
+const users = new Map();
+const usersByName = new Map();
+const sessions = new Map();
+const trackerStates = new Map();
+const lastKnown = new Map();
+const ownedTrackers = new Map();
+const clients = new Set();
+const clientsByUser = new Map();
+const authRateLimits = new Map();
+let saveTimer = null;
+let saving = false;
+let dirty = false;
+const DUMMY_SALT = crypto.randomBytes(16);
 
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
-  <script>
-    'use strict';
-    const SERVICE_UUID = '19b10000-e8f2-537e-4f6c-d104768a1214';
-    const MODE_UUID = '19b10001-e8f2-537e-4f6c-d104768a1214';
-    const TRACKER_ID_UUID = '19b10002-e8f2-537e-4f6c-d104768a1214';
-    const HEARTBEAT_UUID = '19b10003-e8f2-537e-4f6c-d104768a1214';
-    const TRACKER_TTL_MS = 15000;
-    const RSSI_WINDOW_MS = 8000;
-    const CAL_RSSI_1M = -59;
-    const PATH_LOSS_EXPONENT = 2.0;
-    const CAL_TX_POWER = 4, LOST_TX_POWER = 8;
-    const GATT_CONNECT_TIMEOUT_MS = 15000;
-    const GATT_STEP_TIMEOUT_MS = 8000;
-    const FIRST_HEARTBEAT_TIMEOUT_MS = 12000;
-    const REPORT_INTERVAL_MS = 1900;
-    const ADVERT_STALE_MS = 6000, UI_THROTTLE_MS = 250, MAX_LOG_LINES = 300;
-    const OLD_FIRMWARE_TEXT = 'This tracker runs older firmware without status notifications, and this browser cannot listen to Bluetooth advertisements. Flash the current OpenTag firmware to the tracker, then connect again.';
-    const REQUEST_OPTIONS = { filters: [{ namePrefix: 'OpenTag' }], optionalServices: [SERVICE_UUID] };
-    const $ = id => document.getElementById(id);
-    const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
-    const map = L.map('map').setView([47.4979, 19.0402], 12);
-    const TRACKER_MARKER_PANE = 'trackerMarkerPane';
-    map.createPane(TRACKER_MARKER_PANE);
-    map.getPane(TRACKER_MARKER_PANE).style.zIndex = '640';
-    map.getPane(TRACKER_MARKER_PANE).style.pointerEvents = 'auto';
-    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      maxZoom: 19,
-      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-    }).addTo(map);
-
-    let authenticated = false, authMode = 'login';
-    let sharedSocket = null, reconnectTimer = null, reconnectDelay = 1000, reconnectEverOpened = false;
-    let statePollTimer = null, tickTimer = null;
-    let myPosition = null, myAccuracy = null, locationWatchId = null, myMarker = null, myAccuracyCircle = null;
-    let selectedTrackerId = null, firstMapFitDone = false, initialStateSynced = false, userMovedMap = false, programmaticMapMove = false;
-    let ownedTrackers = [], serverOffsetMs = 0;
-    let backendOutdated = false, outdatedWarned = false, lastBackendError = '', lastBackendErrorAt = 0, lastLocationError = '';
-    let lastListHtml = '', listPointerDown = false, refreshSeq = 0;
-    const sharedStates = new Map(), markers = new Map(), accuracyCircles = new Map();
-    const markerOnlineCache = new Map(), popupCache = new Map(), lastShownTx = new Map();
-
-    let activeDevice = null, activeTracker = null, linkUp = false, linkKind = null, receiving = false;
-    let modeCharacteristic = null, heartbeatCharacteristic = null, heartbeatListener = null, disconnectListener = null;
-    let advertListener = null, advertAbort = null, watchStartedAt = 0;
-    let linkStartedAt = 0, lastPacketAt = 0, lastReportSentAt = 0, lastUiUpdate = 0, stopSent = false;
-    let lastTxPower = null, lastRssi = null, lastNormRssi = null, rssiSamples = [];
-    let bleQueue = Promise.resolve(), userBleBusy = false, connectingTrackerId = null, modeBusy = false;
-    let bleRetryTimer = null, bleRetryDelay = 2000, silentLinks = 0, badPacketWarned = false;
-    const sessionDevices = new Map();
-    const BLE_DEVICE_MAP_KEY = 'opentag.v2.bleDeviceMap';
-    const LAST_SELECTED_KEY = 'opentag.v2.lastSelectedTracker';
-    let bleDeviceMap = readBleDeviceMap();
-
-    function readBleDeviceMap() {
-      try { return JSON.parse(localStorage.getItem(BLE_DEVICE_MAP_KEY) || '{}') || {}; } catch (_) { return {}; }
-    }
-    function writeBleDeviceMap() {
-      try { localStorage.setItem(BLE_DEVICE_MAP_KEY, JSON.stringify(bleDeviceMap)); } catch (_) { }
-    }
-    function log(message) {
-      const el = $('log');
-      if (!el) return;
-      const line = document.createElement('div');
-      line.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
-      el.appendChild(line);
-      while (el.childElementCount > MAX_LOG_LINES) el.firstElementChild.remove();
-      el.scrollTop = el.scrollHeight;
-    }
-    function escapeHtml(value) {
-      return String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-    }
-    function serverNow() { return Date.now() + serverOffsetMs; }
-    function formatDistance(m) {
-      if (!Number.isFinite(m)) return '–';
-      if (m < 1000) return `${Math.round(m)} m`;
-      return `${(m / 1000).toFixed(m < 10000 ? 1 : 0)} km`;
-    }
-    function haversine(a, b) {
-      if (!a || !b) return NaN;
-      const rad = Math.PI / 180, lat1 = Number(a[0]), lon1 = Number(a[1]), lat2 = Number(b[0]), lon2 = Number(b[1]);
-      if (![lat1, lon1, lat2, lon2].every(Number.isFinite)) return NaN;
-      const dLat = (lat2 - lat1) * rad, dLon = (lon2 - lon1) * rad;
-      const h = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * rad) * Math.cos(lat2 * rad) * Math.sin(dLon / 2) ** 2;
-      return 6371000 * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
-    }
-    function formatAge(ms) {
-      if (!Number.isFinite(ms) || ms < 0) return '–';
-      const sec = Math.floor(ms / 1000);
-      if (sec < 60) return 'just now';
-      const min = Math.floor(sec / 60);
-      if (min < 60) return `${min} min ago`;
-      const h = Math.floor(min / 60);
-      if (h < 24) return `${h} h ago`;
-      return `${Math.floor(h / 24)} d ago`;
-    }
-    function getState(trackerId) { return sharedStates.get(trackerId) || null; }
-    function isOnline(state) {
-      return Boolean(state && state.live !== false && serverNow() - Number(state.updatedAt || 0) <= TRACKER_TTL_MS);
-    }
-    function currentSelectedRecord() { return ownedTrackers.find(t => t.trackerId === selectedTrackerId) || null; }
-    function currentSelectedState() { return selectedTrackerId ? getState(selectedTrackerId) : null; }
-    function isTemporaryId(deviceId) { return /^(browser|legacy)-/.test(String(deviceId || '')); }
-    function setBackendState(text, online) {
-      if (backendOutdated && text === 'connected') { text = 'connected, but OUTDATED – restart the backend app'; online = false; }
-      $('backendLegend').textContent = `${online ? '🟢' : backendOutdated ? '🔴' : '⚪'} Shared backend: ${text}`;
-    }
-    function setStatus(text, sub = '', online = false) {
-      $('statusText').textContent = text;
-      $('statusSub').textContent = sub;
-      $('statusDot').classList.toggle('online', online);
-    }
-
-    function distanceForState(state) {
-      return myPosition && state?.location ? haversine(myPosition, [state.location.lat, state.location.lng]) : NaN;
-    }
-    function estimatedDistanceForState(trackerId, state) {
-      if (linkUp && linkKind === 'adv' && receiving && activeTracker?.trackerId === trackerId && Number.isFinite(lastNormRssi)) return estimateBleDistance(lastNormRssi);
-      const saved = state?.distanceM;
-      if (saved !== null && saved !== undefined && Number.isFinite(Number(saved))) return Number(saved);
-      return NaN;
-    }
-    function popupHtml(state) {
-      const online = isOnline(state), dist = distanceForState(state);
-      const mode = state.trackerMode === 'lost' ? 'Lost' : state.trackerMode === 'normal' ? 'Normal' : 'Unknown';
-      const gps = Number(state.location?.accuracy);
-      return `<strong>${escapeHtml(state.trackerName || 'OpenTag')}</strong><br>${online ? '🟡 Online' : '🟠 Offline'} · ${mode}<br>Distance from you: ${formatDistance(dist)}<br>Last report: ${formatAge(serverNow() - Number(state.updatedAt || 0))}<br>Reporter GPS accuracy: ${Number.isFinite(gps) ? `${Math.round(gps)} m` : '–'}`;
-    }
-    function refreshPopup(trackerId) {
-      const marker = markers.get(trackerId), state = getState(trackerId);
-      if (!marker || !state || !(marker.isPopupOpen && marker.isPopupOpen())) return;
-      const html = popupHtml(state);
-      if (popupCache.get(trackerId) === html) return;
-      popupCache.set(trackerId, html);
-      marker.setPopupContent(html);
-    }
-    function updateMarkerStyle(trackerId) {
-      const state = getState(trackerId), marker = markers.get(trackerId);
-      if (!state || !marker) return;
-      const online = isOnline(state);
-      if (markerOnlineCache.get(trackerId) === online) return;
-      markerOnlineCache.set(trackerId, online);
-      marker.setStyle({ color: online ? '#854d0e' : '#9a3412', fillColor: online ? '#facc15' : '#f97316', fillOpacity: 1, opacity: 1, weight: 2 });
-      const circle = accuracyCircles.get(trackerId);
-      if (circle) circle.setStyle({ color: online ? '#facc15' : '#f97316', fillColor: online ? '#facc15' : '#f97316', fillOpacity: online ? .10 : .04, opacity: online ? 1 : .55 });
-    }
-    function removeTrackerLayers(trackerId) {
-      sharedStates.delete(trackerId);
-      markerOnlineCache.delete(trackerId);
-      popupCache.delete(trackerId);
-      lastShownTx.delete(trackerId);
-      const marker = markers.get(trackerId);
-      if (marker) { map.removeLayer(marker); markers.delete(trackerId); }
-      const circle = accuracyCircles.get(trackerId);
-      if (circle) { map.removeLayer(circle); accuracyCircles.delete(trackerId); }
-    }
-    function renderState(state) {
-      if (!state || !state.trackerId) return;
-      const id = state.trackerId;
-      const old = sharedStates.get(id);
-      if (old && Number(state.updatedAt || 0) < Number(old.updatedAt || 0)) return;
-      sharedStates.set(id, state);
-      if (state.location && Number.isFinite(Number(state.location.lat)) && Number.isFinite(Number(state.location.lng))) {
-        const latlng = [Number(state.location.lat), Number(state.location.lng)];
-        let marker = markers.get(id);
-        if (!marker) {
-          marker = L.circleMarker(latlng, { pane: TRACKER_MARKER_PANE, radius: 8, color: '#854d0e', weight: 2, fillColor: '#facc15', fillOpacity: 1 }).addTo(map);
-          marker.bindPopup(() => popupHtml(getState(id) || state));
-          markers.set(id, marker);
-          markerOnlineCache.delete(id);
-        } else marker.setLatLng(latlng);
-        const accuracy = Number(state.location.accuracy);
-        let circle = accuracyCircles.get(id);
-        if (Number.isFinite(accuracy) && accuracy > 0) {
-          if (!circle) {
-            circle = L.circle(latlng, { radius: accuracy, color: '#facc15', fillColor: '#facc15', fillOpacity: .08, weight: 1 }).addTo(map);
-            accuracyCircles.set(id, circle);
-            markerOnlineCache.delete(id);
-          } else { circle.setLatLng(latlng); circle.setRadius(accuracy); }
-        } else if (circle) { map.removeLayer(circle); accuracyCircles.delete(id); }
-        refreshPopup(id);
-        updateMarkerStyle(id);
-      }
-      renderTrackerList();
-      updateDashboard();
-      tryInitialMapFit();
-    }
-    function setOffline(trackerId) {
-      const current = getState(trackerId);
-      if (!current || current.live === false) return;
-      current.live = false;
-      updateMarkerStyle(trackerId);
-      refreshPopup(trackerId);
-      updateDashboard();
-      renderTrackerList();
-    }
-    function markOffline(trackerId, lastKnown = null) {
-      const current = getState(trackerId);
-      if (lastKnown && lastKnown.location && (!current || Number(lastKnown.updatedAt || 0) >= Number(current.updatedAt || 0))) {
-        renderState({ ...lastKnown, live: false });
-      } else setOffline(trackerId);
-    }
-    function updateDashboard() {
-      const record = currentSelectedRecord(), state = currentSelectedState();
-      if (!record) {
-        for (const id of ['deviceName', 'gpsDistance', 'distance', 'txPower', 'lastSeen', 'accuracy']) $(id).textContent = '–';
-        $('trackerPill').textContent = '🟠 Tracker: offline';
-        $('modeLabel').textContent = 'Mode unknown';
-        $('modeToggle').checked = false;
-        $('modeToggle').disabled = true;
-        setStatus('No tracker selected', 'Add a tracker to your account.', false);
-        return;
-      }
-      const online = isOnline(state);
-      const mine = activeTracker?.trackerId === record.trackerId;
-      const gpsDistance = distanceForState(state);
-      const estimatedDistance = estimatedDistanceForState(record.trackerId, state);
-      $('deviceName').textContent = record.name;
-      $('gpsDistance').textContent = Number.isFinite(gpsDistance) ? formatDistance(gpsDistance) : '–';
-      $('distance').textContent = Number.isFinite(estimatedDistance) ? formatDistance(estimatedDistance) : '–';
-      const rawTx = state?.txPower;
-      if (rawTx !== null && rawTx !== undefined && Number.isFinite(Number(rawTx))) lastShownTx.set(record.trackerId, Number(rawTx));
-      const shownTx = lastShownTx.get(record.trackerId);
-      $('txPower').textContent = shownTx !== undefined ? `${shownTx} dBm` : '–';
-      $('lastSeen').textContent = Number(state?.lastBlePacketAt) > 0 ? new Date(Number(state.lastBlePacketAt) - serverOffsetMs).toLocaleTimeString() : '–';
-      const gps = Number(state?.location?.accuracy);
-      $('accuracy').textContent = Number.isFinite(gps) ? `${Math.round(gps)} m` : '–';
-      $('trackerPill').textContent = online ? '🟡 Tracker: online' : '🟠 Tracker: offline';
-      $('modeLabel').textContent = state?.trackerMode === 'lost' ? 'Lost' : state?.trackerMode === 'normal' ? 'Normal' : 'Unknown';
-      if (!modeBusy) $('modeToggle').checked = state?.trackerMode === 'lost';
-      $('modeToggle').disabled = modeBusy || !(mine && linkUp && modeCharacteristic);
-      let sub = online ? 'Receiving tracker status.' : 'Showing the last known position, if available.';
-      if (connectingTrackerId === record.trackerId) sub = 'Connecting over Bluetooth…';
-      else if (mine && !linkUp) sub = 'Bluetooth connection lost. Reconnecting automatically…';
-      else if (mine && !receiving) sub = linkKind === 'adv' ? 'Waiting for BLE advertising packets…' : 'Connected. Waiting for the first status packet…';
-      else if (online && !mine) sub = 'Reported by another device signed in to your account.';
-      setStatus(`${record.name} · ${online ? 'Online' : 'Offline'}`, sub, online);
-    }
-    function setListHtml(html) {
-      if (html === lastListHtml) return;
-      lastListHtml = html;
-      $('trackerList').innerHTML = html;
-    }
-    function renderTrackerList() {
-      if ($('trackerMenu').hidden || listPointerDown) return;
-      if (!ownedTrackers.length) { setListHtml('<div class="menu-empty">No trackers yet. Choose “Add tracker” to pair your first OpenTag.</div>'); return; }
-      setListHtml(ownedTrackers.map(record => {
-        const state = getState(record.trackerId), online = isOnline(state), selected = record.trackerId === selectedTrackerId;
-        const mode = state?.trackerMode === 'lost' ? 'Lost' : state?.trackerMode === 'normal' ? 'Normal' : 'Mode unknown';
-        const gpsDistance = distanceForState(state);
-        const distanceText = Number.isFinite(gpsDistance) ? formatDistance(gpsDistance) : 'Unavailable';
-        const secondaryText = online ? `GPS distance: ${distanceText}` : `Last seen: ${state?.updatedAt ? formatAge(serverNow() - Number(state.updatedAt)) : 'Never reported'}`;
-        const mine = activeTracker?.trackerId === record.trackerId;
-        const connecting = connectingTrackerId === record.trackerId;
-        const connectText = connecting ? 'Connecting…' : mine ? (linkUp ? 'Disconnect' : 'Stop reconnecting') : 'Connect';
-        const id = escapeHtml(record.trackerId);
-        return `<div class="tracker-row ${selected ? 'selected' : ''}">
-          <button type="button" class="tracker-select" data-select="${id}"><span class="tracker-status-dot ${online ? 'online' : ''}"></span><span class="tracker-row-main"><span class="tracker-name">${escapeHtml(record.name)}</span><span class="tracker-sub">${online ? 'Online' : 'Offline'} · Mode: ${mode} · ${secondaryText}</span></span></button>
-          <div class="tracker-row-actions"><button type="button" data-connect="${id}"${connecting ? ' disabled' : ''}>${connectText}</button><button type="button" class="ghost" title="Rename" data-rename="${id}">✎</button><button type="button" class="ghost" title="Remove tracker" data-remove="${id}">×</button></div>
-        </div>`;
-      }).join(''));
-    }
-    function focusTracker(trackerId) {
-      const state = getState(trackerId), marker = markers.get(trackerId);
-      const position = state?.location ? [Number(state.location.lat), Number(state.location.lng)] : null;
-      if (marker) marker.openPopup();
-      if (!position) { log('This tracker has no saved location yet.'); return; }
-      programmaticMapMove = true;
-      if (myPosition) map.fitBounds(L.latLngBounds([myPosition, position]), { padding: [40, 40], maxZoom: 16 });
-      else map.setView(position, 16);
-      map.once('moveend', () => { programmaticMapMove = false; });
-      setTimeout(() => { programmaticMapMove = false; }, 900);
-    }
-    function closeMenu() {
-      $('trackerMenu').hidden = true;
-      $('menuBtn').setAttribute('aria-expanded', 'false');
-    }
-    function selectTracker(trackerId, focus = true) {
-      if (!ownedTrackers.some(item => item.trackerId === trackerId)) return;
-      selectedTrackerId = trackerId;
-      try { localStorage.setItem(LAST_SELECTED_KEY, trackerId); } catch (_) { }
-      renderTrackerList();
-      updateDashboard();
-      if (focus) focusTracker(trackerId);
-      closeMenu();
-    }
-    function tryInitialMapFit() {
-      if (firstMapFitDone || !initialStateSynced || !myPosition || userMovedMap) return;
-      const points = [myPosition];
-      for (const state of sharedStates.values()) {
-        if (state.location && Number.isFinite(Number(state.location.lat)) && Number.isFinite(Number(state.location.lng))) points.push([Number(state.location.lat), Number(state.location.lng)]);
-      }
-      programmaticMapMove = true;
-      if (points.length > 1) map.fitBounds(L.latLngBounds(points), { padding: [36, 36], maxZoom: 15 });
-      else map.setView(myPosition, 15);
-      firstMapFitDone = true;
-      map.once('moveend', () => { programmaticMapMove = false; });
-      setTimeout(() => { programmaticMapMove = false; }, 900);
-    }
-    map.on('dragstart', () => { if (!programmaticMapMove) userMovedMap = true; });
-    map.on('zoomstart', () => { if (!programmaticMapMove) userMovedMap = true; });
-
-    function updateOwnMarker(position) {
-      myPosition = [position.coords.latitude, position.coords.longitude];
-      myAccuracy = Number(position.coords.accuracy);
-      lastLocationError = '';
-      if (!myMarker) {
-        myMarker = L.circleMarker(myPosition, { radius: 8, color: '#2f81f7', fillColor: '#2f81f7', fillOpacity: .95, weight: 2 }).addTo(map);
-        myMarker.bindPopup(() => `This device<br>GPS accuracy: ${Number.isFinite(myAccuracy) ? Math.round(myAccuracy) + ' m' : '–'}`);
-      } else myMarker.setLatLng(myPosition);
-      if (!myAccuracyCircle) myAccuracyCircle = L.circle(myPosition, { radius: Math.max(1, myAccuracy || 1), color: '#2f81f7', fillColor: '#2f81f7', fillOpacity: .05, weight: 1 }).addTo(map);
-      else { myAccuracyCircle.setLatLng(myPosition); myAccuracyCircle.setRadius(Math.max(1, myAccuracy || 1)); }
-      updateDashboard();
-      renderTrackerList();
-      tryInitialMapFit();
-    }
-    function startLocation() {
-      if (locationWatchId !== null || !navigator.geolocation) return;
-      locationWatchId = navigator.geolocation.watchPosition(updateOwnMarker, error => {
-        if (error.message === lastLocationError) return;
-        lastLocationError = error.message;
-        log(`Location error: ${error.message}`);
-      }, { enableHighAccuracy: true, maximumAge: 5000, timeout: 15000 });
-      log('Location service started.');
-    }
-
-    async function apiJson(url, options = {}) {
-      const response = await fetch(url, {
-        credentials: 'same-origin', cache: 'no-store', ...options,
-        headers: { ...(options.headers || {}), ...(options.body ? { 'Content-Type': 'application/json' } : {}) }
-      });
-      let result = {};
-      try { result = await response.json(); } catch (_) { /* e.g. an HTML error page from the proxy */ }
-      if (!response.ok) {
-        const error = new Error(result.error || `Request failed (HTTP ${response.status})`);
-        error.status = response.status;
-        throw error;
-      }
-      return result;
-    }
-    function describeError(error) {
-      if (error?.status === 404 && error.message === 'Not found') {
-        return 'The backend does not know this request (HTTP 404). It is still running an older OpenTag version: copy the new backend files, restart the OpenTag backend app, then reload this page.';
-      }
-      return error?.message || 'Unknown error';
-    }
-    function flagOutdatedBackend() {
-      backendOutdated = true;
-      setBackendState('connected', true);
-      if (outdatedWarned) return;
-      outdatedWarned = true;
-      log('The backend did not report a version or a tracker list, so it is still running old code. Copy the new backend files, restart the OpenTag backend app and reload this page.');
-    }
-    function updateOwnedTrackers(list) {
-      if (!Array.isArray(list)) return;
-      ownedTrackers = list;
-      const known = new Set(list.map(t => t.trackerId));
-      for (const id of [...sharedStates.keys()]) if (!known.has(id)) removeTrackerLayers(id);
-      if (activeTracker) {
-        const fresh = list.find(t => t.trackerId === activeTracker.trackerId);
-        if (fresh) activeTracker = fresh;
-        else { stopActiveTracking(false); log('The tracker this browser was following is no longer in your account. Stopped following it.'); }
-      }
-      if (!selectedTrackerId || !known.has(selectedTrackerId)) {
-        let remembered = '';
-        try { remembered = localStorage.getItem(LAST_SELECTED_KEY) || ''; } catch (_) { }
-        selectedTrackerId = known.has(remembered) ? remembered : (ownedTrackers[0]?.trackerId || null);
-      }
-      renderTrackerList();
-      updateDashboard();
-    }
-    async function refreshSharedState() {
-      if (!authenticated || document.hidden) return;
-      const seq = ++refreshSeq;
-      try {
-        const snapshot = await apiJson('/api/state');
-        if (!authenticated || seq !== refreshSeq) return;
-        if (Number.isFinite(snapshot.serverTime)) serverOffsetMs = snapshot.serverTime - Date.now();
-        if (Array.isArray(snapshot.ownedTrackers)) {
-          if (backendOutdated) { backendOutdated = false; setBackendState('connected', true); }
-          updateOwnedTrackers(snapshot.ownedTrackers);
-        } else flagOutdatedBackend();
-        const known = Array.isArray(snapshot.lastKnown) ? snapshot.lastKnown : [];
-        const live = Array.isArray(snapshot.trackers) ? snapshot.trackers : [];
-        const liveIds = new Set(live.map(s => s.trackerId));
-        for (const s of known) if (!liveIds.has(s.trackerId)) renderState({ ...s, live: false });
-        for (const s of live) renderState({ ...s, live: true });
-        const ownId = linkUp && receiving ? activeTracker?.trackerId : null;
-        for (const id of [...sharedStates.keys()]) if (!liveIds.has(id) && id !== ownId) setOffline(id);
-        initialStateSynced = true;
-        tryInitialMapFit();
-      } catch (error) {
-        if (error.status === 401) showSignIn('Your session expired. Please sign in again.');
-      }
-    }
-    async function startStatePolling() {
-      if (statePollTimer) clearInterval(statePollTimer);
-      statePollTimer = setInterval(refreshSharedState, 10000);
-      await refreshSharedState();
-    }
-    function backendWsUrl() { return `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws/`; }
-    function backendMessage(message) {
-      if (!message || typeof message !== 'object') return;
-      if (message.type === 'helloAck') {
-        if (Number.isFinite(message.serverTime)) serverOffsetMs = message.serverTime - Date.now();
-        if (message.appVersion) log(`Backend version ${message.appVersion}.`); else flagOutdatedBackend();
-        return;
-      }
-      if (message.type === 'snapshot') {
-        if (Number.isFinite(message.serverTime)) serverOffsetMs = message.serverTime - Date.now();
-        if (Array.isArray(message.ownedTrackers)) updateOwnedTrackers(message.ownedTrackers);
-        const liveIds = new Set((message.trackers || []).map(s => s.trackerId));
-        (message.lastKnown || []).forEach(s => { if (!liveIds.has(s.trackerId)) renderState({ ...s, live: false }); });
-        (message.trackers || []).forEach(s => renderState({ ...s, live: true }));
-        initialStateSynced = true;
-        tryInitialMapFit();
-        setBackendState('connected', true);
-        return;
-      }
-      if (message.type === 'trackerAdded') {
-        const tracker = message.tracker;
-        if (tracker?.trackerId && !ownedTrackers.some(t => t.trackerId === tracker.trackerId)) {
-          ownedTrackers.push(tracker);
-          if (!selectedTrackerId) selectedTrackerId = tracker.trackerId;
-          renderTrackerList();
-          updateDashboard();
-        }
-        return;
-      }
-      if (message.type === 'trackerState') {
-        if (message.state?.trackerId && !ownedTrackers.some(t => t.trackerId === message.state.trackerId)) refreshSharedState();
-        renderState(message.state);
-        return;
-      }
-      if (message.type === 'trackerRemoved') { markOffline(message.trackerId, message.lastKnown); return; }
-      if (message.type === 'trackerRenamed') {
-        const item = ownedTrackers.find(t => t.trackerId === message.trackerId);
-        if (item) item.name = message.name;
-        const state = getState(message.trackerId);
-        if (state) state.trackerName = message.name;
-        popupCache.delete(message.trackerId);
-        renderTrackerList();
-        updateDashboard();
-        return;
-      }
-      if (message.type === 'trackerDeleted') {
-        if (!ownedTrackers.some(t => t.trackerId === message.trackerId)) return;
-        if (activeTracker?.trackerId === message.trackerId) {
-          stopActiveTracking(false);
-          log('This tracker was removed from your account on another device. Stopped following it.');
-        }
-        forgetTracker(message.trackerId);
-        if (message.reason === 'tracker_rebound') refreshSharedState();
-        return;
-      }
-      if (message.type === 'error') {
-        const text = message.message || 'unknown error';
-        if (text !== lastBackendError || Date.now() - lastBackendErrorAt > 30000) log(`Backend error: ${text}`);
-        lastBackendError = text;
-        lastBackendErrorAt = Date.now();
-      }
-    }
-    function forgetTracker(trackerId) {
-      ownedTrackers = ownedTrackers.filter(t => t.trackerId !== trackerId);
-      removeTrackerLayers(trackerId);
-      sessionDevices.delete(trackerId);
-      delete bleDeviceMap[trackerId];
-      writeBleDeviceMap();
-      if (selectedTrackerId === trackerId) {
-        selectedTrackerId = ownedTrackers[0]?.trackerId || null;
-        if (selectedTrackerId) try { localStorage.setItem(LAST_SELECTED_KEY, selectedTrackerId); } catch (_) { }
-      }
-      renderTrackerList();
-      updateDashboard();
-    }
-    function scheduleBackendReconnect() {
-      if (!authenticated || reconnectTimer) return;
-      reconnectTimer = setTimeout(() => { reconnectTimer = null; connectBackend(); }, reconnectDelay);
-      reconnectDelay = Math.min(15000, reconnectDelay * 2);
-    }
-    function connectBackend() {
-      if (!authenticated || (sharedSocket && [WebSocket.OPEN, WebSocket.CONNECTING].includes(sharedSocket.readyState))) return;
-      setBackendState('connecting…', false);
-      try {
-        const ws = new WebSocket(backendWsUrl());
-        sharedSocket = ws;
-        ws.addEventListener('open', () => {
-          if (sharedSocket !== ws) return;
-          reconnectDelay = 1000;
-          reconnectEverOpened = true;
-          setBackendState('connected', true);
-          log('Shared backend connected.');
-          ws.send(JSON.stringify({ type: 'hello', appVersion: 'v2.0.6' }));
-        });
-        ws.addEventListener('message', event => {
-          if (sharedSocket !== ws) return;
-          try { backendMessage(JSON.parse(event.data)); } catch (error) { log(`Backend message error: ${error.message}`); }
-        });
-        ws.addEventListener('close', () => {
-          if (sharedSocket !== ws) return;
-          setBackendState(reconnectEverOpened ? 'disconnected; retrying…' : 'cannot connect; retrying…', false);
-          scheduleBackendReconnect();
-        });
-        ws.addEventListener('error', () => { if (sharedSocket === ws) setBackendState('connection error', false); });
-      } catch (error) {
-        setBackendState('connection error', false);
-        log(`WebSocket error: ${error.message}`);
-        scheduleBackendReconnect();
-      }
-    }
-    function sendWs(message) {
-      if (!sharedSocket || sharedSocket.readyState !== WebSocket.OPEN) return false;
-      try { sharedSocket.send(JSON.stringify(message)); return true; } catch (_) { return false; }
-    }
-
-    async function gattStep(name, promise, ms = GATT_STEP_TIMEOUT_MS) {
-      promise.catch(() => { });
-      let timer;
-      const timeout = new Promise((_, reject) => {
-        timer = setTimeout(() => { const error = new Error(`Timeout while ${name}.`); error.timedOut = name; reject(error); }, ms);
-      });
-      try { return await Promise.race([promise, timeout]); } finally { clearTimeout(timer); }
-    }
-    function queueBle(task) {
-      const run = bleQueue.then(task, task);
-      bleQueue = run.catch(() => { });
-      return run;
-    }
-    function isLinkError(error) {
-      return error?.name === 'NetworkError' || /disconnected|not connected|no longer in range|connection attempt failed|unknown reason/i.test(error?.message || '');
-    }
-    async function openTracker(device, attempts = 3) {
-      if (!device?.gatt) throw new Error('This Bluetooth device does not expose GATT.');
-      let lastError;
-      for (let attempt = 0; attempt < attempts; attempt++) {
-        try {
-          const server = await gattStep('connecting', device.gatt.connect(), GATT_CONNECT_TIMEOUT_MS);
-          const service = await gattStep('opening the tracker service', server.getPrimaryService(SERVICE_UUID));
-          const optional = async uuid => {
-            try { return await gattStep('reading the tracker layout', service.getCharacteristic(uuid)); }
-            catch (error) { if (error?.name === 'NotFoundError') return null; throw error; }
-          };
-          let deviceId = '';
-          const idChar = await optional(TRACKER_ID_UUID);
-          if (idChar) {
-            deviceId = new TextDecoder().decode(await gattStep('reading the hardware ID', idChar.readValue())).replace(/\0/g, '').trim();
-            if (!/^[a-zA-Z0-9._:-]{6,100}$/.test(deviceId)) throw Object.assign(new Error('The tracker sent an unreadable hardware ID.'), { name: 'NetworkError' });
-          }
-          const modeChar = await gattStep('opening the mode setting', service.getCharacteristic(MODE_UUID));
-          const modeByte = (await gattStep('reading the mode', modeChar.readValue())).getUint8(0);
-          const heartbeatChar = await optional(HEARTBEAT_UUID);
-          const stable = Boolean(deviceId);
-          if (!stable) deviceId = `browser-${String(device.id || '').replace(/[^a-zA-Z0-9.-]/g, '').slice(0, 90)}`;
-          return { deviceId, stable, mode: modeByte === 0 ? 'normal' : modeByte === 1 ? 'lost' : null, modeChar, heartbeatChar };
-        } catch (error) {
-          lastError = error;
-          try { device.gatt.disconnect(); } catch (_) { }
-          if (error.timedOut === 'connecting' || !isLinkError(error) || attempt === attempts - 1) break;
-          await sleep(700 * (attempt + 1));
-        }
-      }
-      throw lastError;
-    }
-    function explainBleFailure(error, record) {
-      const name = record?.name || 'The tracker';
-      if (error?.timedOut === 'connecting' || (error?.timedOut && isOnline(getState(record?.trackerId)))) {
-        const elsewhere = record && isOnline(getState(record.trackerId)) && activeTracker?.trackerId !== record.trackerId;
-        return elsewhere
-          ? `${name} did not answer because it is connected to another device signed in to your account. A tracker can be connected to one device at a time: press Disconnect there first, then Connect here.`
-          : `${name} did not answer. It may be out of range, switched off, or connected to another phone or computer (press Disconnect there first).`;
-      }
-      if (isLinkError(error)) return `The Bluetooth connection to ${name} dropped while it was being set up, even after retrying. Move closer and press Connect again. (${error.message})`;
-      return describeError(error);
-    }
-
-    function resetSignal() {
-      lastTxPower = null; lastRssi = null; lastNormRssi = null; rssiSamples = [];
-    }
-    function detachLink() {
-      const device = activeDevice;
-      try { advertAbort?.abort(); } catch (_) { }
-      if (heartbeatCharacteristic && heartbeatListener) {
-        try { heartbeatCharacteristic.removeEventListener('characteristicvaluechanged', heartbeatListener); } catch (_) { }
-      }
-      if (device && disconnectListener) {
-        try { device.removeEventListener('gattserverdisconnected', disconnectListener); } catch (_) { }
-      }
-      if (device && advertListener) {
-        try { device.removeEventListener('advertisementreceived', advertListener); } catch (_) { }
-      }
-      advertAbort = null; advertListener = null; heartbeatListener = null; disconnectListener = null;
-      heartbeatCharacteristic = null; modeCharacteristic = null;
-      linkUp = false; receiving = false; linkKind = null;
-    }
-    function stopActiveTracking(sendStop = true) {
-      const device = activeDevice, tracker = activeTracker;
-      clearTimeout(bleRetryTimer); bleRetryTimer = null;
-      if (tracker && sendStop && !stopSent) sendWs({ type: 'trackerStop', deviceId: tracker.deviceId });
-      detachLink();
-      try { device?.gatt?.disconnect(); } catch (_) { }
-      activeDevice = null; activeTracker = null;
-      stopSent = false; silentLinks = 0; bleRetryDelay = 2000; lastPacketAt = 0; linkStartedAt = 0;
-      resetSignal();
-      if (tracker) setOffline(tracker.trackerId);
-      renderTrackerList();
-      updateDashboard();
-    }
-    function linkLost(reason) {
-      if (!activeTracker || !linkUp) return;
-      const device = activeDevice, tracker = activeTracker;
-      detachLink();
-      try { device?.gatt?.disconnect(); } catch (_) { }
-      if (!stopSent) { sendWs({ type: 'trackerStop', deviceId: tracker.deviceId }); stopSent = true; }
-      setOffline(tracker.trackerId);
-      log(`${reason} Reconnecting to ${tracker.name} automatically…`);
-      renderTrackerList();
-      updateDashboard();
-      scheduleBleRetry(1000);
-    }
-    function scheduleBleRetry(delay) {
-      clearTimeout(bleRetryTimer);
-      bleRetryTimer = setTimeout(() => { bleRetryTimer = null; queueBle(retryLink); }, delay);
-    }
-    async function retryLink() {
-      const device = activeDevice, tracker = activeTracker;
-      if (!device || !tracker || linkUp) return;
-      const stillWanted = () => activeDevice === device && activeTracker?.trackerId === tracker.trackerId;
-      try {
-        const identity = await openTracker(device, 1);
-        if (!stillWanted()) { if (activeDevice !== device) try { device.gatt.disconnect(); } catch (_) { } return; }
-        if (identity.stable && identity.deviceId !== activeTracker.deviceId) throw new Error('A different tracker answered.');
-        await attachLink(device, identity);
-        log(`Reconnected to ${tracker.name}.`);
-      } catch (error) {
-        if (!stillWanted()) return;
-        bleRetryDelay = Math.min(30000, bleRetryDelay * 2);
-        scheduleBleRetry(bleRetryDelay);
-      }
-    }
-    async function attachLink(device, identity) {
-      resetSignal();
-      receiving = false; lastPacketAt = 0; linkStartedAt = Date.now(); stopSent = false;
-      if (identity.heartbeatChar) {
-        heartbeatCharacteristic = identity.heartbeatChar;
-        modeCharacteristic = identity.modeChar;
-        heartbeatListener = event => handleHeartbeat(event.target.value);
-        disconnectListener = () => { if (device === activeDevice) linkLost('Bluetooth connection lost.'); };
-        heartbeatCharacteristic.addEventListener('characteristicvaluechanged', heartbeatListener);
-        device.addEventListener('gattserverdisconnected', disconnectListener);
-        linkKind = 'gatt';
-        linkUp = true;
-        try {
-          await gattStep('subscribing to tracker status', heartbeatCharacteristic.startNotifications());
-          await gattStep('reading tracker status', heartbeatCharacteristic.readValue()).catch(() => { });
-        } catch (error) {
-          detachLink();
-          try { device.gatt.disconnect(); } catch (_) { }
-          throw error;
-        }
-      } else if (typeof device.watchAdvertisements === 'function') {
-        try { device.gatt.disconnect(); } catch (_) { }
-        advertListener = onAdvertisement;
-        advertAbort = new AbortController();
-        device.addEventListener('advertisementreceived', advertListener);
-        linkKind = 'adv';
-        linkUp = true;
-        try {
-          await device.watchAdvertisements({ signal: advertAbort.signal });
-          watchStartedAt = Date.now();
-        } catch (error) { detachLink(); throw error; }
-        if (identity.mode) applyLocalState({ trackerMode: identity.mode }, false);
-      } else {
-        try { device.gatt.disconnect(); } catch (_) { }
-        throw new Error(OLD_FIRMWARE_TEXT);
-      }
-      renderTrackerList();
-      updateDashboard();
-    }
-    async function startTracking(device, record, identity) {
-      if (!identity.heartbeatChar && typeof device.watchAdvertisements !== 'function') {
-        try { device.gatt.disconnect(); } catch (_) { }
-        throw new Error(OLD_FIRMWARE_TEXT);
-      }
-      if (activeTracker) stopActiveTracking();
-      activeDevice = device;
-      activeTracker = record;
-      sessionDevices.set(record.trackerId, device);
-      bleDeviceMap[record.trackerId] = device.id;
-      writeBleDeviceMap();
-      try {
-        await attachLink(device, identity);
-      } catch (error) {
-        if (activeDevice === device) stopActiveTracking(false);
-        throw error;
-      }
-      log(linkKind === 'gatt' ? `Connected to ${record.name}. Receiving status updates.` : `Listening to ${record.name}.`);
-    }
-    function applyLocalState(extra = {}, live = true) {
-      if (!activeTracker) return;
-      const old = getState(activeTracker.trackerId) || {};
-      const distance = linkKind === 'adv' ? estimateBleDistance(lastNormRssi) : NaN;
-      renderState({
-        ...old,
-        trackerId: activeTracker.trackerId,
-        deviceId: activeTracker.deviceId,
-        trackerName: activeTracker.name,
-        location: myPosition ? { lat: myPosition[0], lng: myPosition[1], accuracy: Number.isFinite(myAccuracy) ? myAccuracy : null } : (old.location || null),
-        rssi: linkKind === 'adv' && Number.isFinite(lastRssi) ? lastRssi : null,
-        txPower: Number.isFinite(lastTxPower) ? lastTxPower : (old.txPower ?? null),
-        distanceM: Number.isFinite(distance) ? distance : null,
-        lastBlePacketAt: lastPacketAt ? Math.round(serverNow() - (Date.now() - lastPacketAt)) : (old.lastBlePacketAt ?? null),
-        updatedAt: live && receiving ? serverNow() : (old.updatedAt || serverNow()),
-        ...extra,
-        live: live && receiving
-      });
-    }
-    function handleHeartbeat(value) {
-      if (!activeTracker || !linkUp || linkKind !== 'gatt' || !value || value.byteLength < 5) return;
-      const modeByte = value.getUint8(1);
-      if (value.getUint8(0) !== 1 || modeByte > 1) {
-        if (!badPacketWarned) { badPacketWarned = true; log('Received an unsupported tracker status packet.'); }
-        return;
-      }
-      lastPacketAt = Date.now();
-      receiving = true;
-      silentLinks = 0;
-      bleRetryDelay = 2000;
-      lastTxPower = value.getInt8(2);
-      applyLocalState({ trackerMode: modeByte === 1 ? 'lost' : 'normal' });
-      reportActiveTracker();
-    }
-    function estimateBleDistance(rssi) {
-      if (!Number.isFinite(rssi)) return NaN;
-      return Math.pow(10, (CAL_RSSI_1M - rssi) / (10 * PATH_LOSS_EXPONENT));
-    }
-    function median(values) {
-      const sorted = [...values].sort((a, b) => a - b), mid = sorted.length >> 1;
-      return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
-    }
-    function onAdvertisement(event) {
-      if (!activeTracker || !linkUp || linkKind !== 'adv') return;
-      const nowMs = Date.now();
-      lastPacketAt = nowMs;
-      if (typeof event.txPower === 'number' && Number.isFinite(event.txPower)) lastTxPower = event.txPower;
-      if (typeof event.rssi === 'number' && Number.isFinite(event.rssi)) {
-        const mode = getState(activeTracker.trackerId)?.trackerMode;
-        const tx = Number.isFinite(lastTxPower) ? lastTxPower : (mode === 'lost' ? LOST_TX_POWER : CAL_TX_POWER);
-        rssiSamples.push({ t: nowMs, r: event.rssi, v: event.rssi - (tx - CAL_TX_POWER) });
-        while (rssiSamples.length > 25 || nowMs - rssiSamples[0].t > RSSI_WINDOW_MS) rssiSamples.shift();
-        lastRssi = median(rssiSamples.map(x => x.r));
-        lastNormRssi = median(rssiSamples.map(x => x.v));
-      }
-      const first = !receiving;
-      receiving = true;
-      if (!first && nowMs - lastUiUpdate < UI_THROTTLE_MS) return;
-      lastUiUpdate = nowMs;
-      applyLocalState();
-      reportActiveTracker();
-    }
-    function reportActiveTracker() {
-      if (!activeTracker || !linkUp || !receiving) return;
-      if (Date.now() - lastReportSentAt < REPORT_INTERVAL_MS) return;
-      const state = getState(activeTracker.trackerId);
-      const distance = linkKind === 'adv' ? estimateBleDistance(lastNormRssi) : NaN;
-      const sent = sendWs({
-        type: 'trackerReport',
-        deviceId: activeTracker.deviceId,
-        location: myPosition ? { lat: myPosition[0], lng: myPosition[1], accuracy: Number.isFinite(myAccuracy) ? myAccuracy : null } : null,
-        rssi: linkKind === 'adv' && Number.isFinite(lastRssi) ? lastRssi : null,
-        txPower: Number.isFinite(lastTxPower) ? lastTxPower : null,
-        distanceM: Number.isFinite(distance) ? distance : null,
-        trackerMode: state?.trackerMode || null,
-        lastBlePacketAt: state?.lastBlePacketAt ?? null
-      });
-      if (sent) { lastReportSentAt = Date.now(); stopSent = false; }
-    }
-    function tick() {
-      if (activeTracker && linkUp) {
-        const nowMs = Date.now();
-        if (linkKind === 'gatt') {
-          if (!receiving && nowMs - linkStartedAt > FIRST_HEARTBEAT_TIMEOUT_MS) {
-            if (++silentLinks >= 3) {
-              const name = activeTracker.name;
-              stopActiveTracking();
-              log(`${name} connects but never sends status packets. Flash the current OpenTag firmware to it.`);
-              setStatus(`${name} did not respond`, 'Check the tracker firmware.', false);
-            } else linkLost('No status packet arrived.');
-          } else if (receiving && nowMs - lastPacketAt > TRACKER_TTL_MS) linkLost('Tracker status packets stopped.');
-        } else if (linkKind === 'adv') {
-          if (receiving && nowMs - lastPacketAt > TRACKER_TTL_MS) {
-            receiving = false;
-            if (!stopSent) { sendWs({ type: 'trackerStop', deviceId: activeTracker.deviceId }); stopSent = true; }
-            setOffline(activeTracker.trackerId);
-          }
-          if (nowMs - Math.max(lastPacketAt, watchStartedAt) > ADVERT_STALE_MS) restartAdvertWatch();
-        }
-        reportActiveTracker();
-      }
-      if (document.hidden) return;
-      for (const id of sharedStates.keys()) updateMarkerStyle(id);
-      for (const id of markers.keys()) refreshPopup(id);
-      updateDashboard();
-      renderTrackerList();
-    }
-    async function restartAdvertWatch() {
-      const device = activeDevice;
-      if (!device || linkKind !== 'adv' || typeof device.watchAdvertisements !== 'function') return;
-      watchStartedAt = Date.now();
-      try { advertAbort?.abort(); } catch (_) { }
-      const controller = advertAbort = new AbortController();
-      try { await device.watchAdvertisements({ signal: controller.signal }); }
-      catch (error) { if (error?.name !== 'AbortError' && advertAbort === controller) log(`BLE listener restart failed: ${error.message}`); }
-    }
-
-    function userBleAction(label, trackerId, work) {
-      userBleBusy = true;
-      connectingTrackerId = trackerId;
-      if (activeTracker && !linkUp) {
-        try { activeDevice.gatt.disconnect(); } catch (_) { }
-      }
-      $('addTrackerBtn').disabled = true;
-      renderTrackerList();
-      updateDashboard();
-      return queueBle(work).catch(error => {
-        if (error?.name === 'NotFoundError') return;
-        const record = ownedTrackers.find(t => t.trackerId === connectingTrackerId) || null;
-        const text = explainBleFailure(error, record);
-        log(`${label} failed: ${text}`);
-        alert(text);
-      }).finally(() => {
-        userBleBusy = false;
-        connectingTrackerId = null;
-        $('addTrackerBtn').disabled = false;
-        renderTrackerList();
-        updateDashboard();
-      });
-    }
-    function bluetoothAvailable() {
-      if (navigator.bluetooth) return true;
-      alert('Web Bluetooth is not available. Use a Chromium based browser over HTTPS.');
-      return false;
-    }
-    function addTracker() {
-      if (userBleBusy || !bluetoothAvailable()) return;
-      const chosen = navigator.bluetooth.requestDevice(REQUEST_OPTIONS);
-      chosen.catch(() => { });
-      userBleAction('Add tracker', null, async () => {
-        const device = await chosen;
-        if (device === activeDevice && activeTracker) {
-          log(`${activeTracker.name} is already connected in this browser.`);
-          selectTracker(activeTracker.trackerId, false);
-          return;
-        }
-        const identity = await openTracker(device);
-        let record;
-        try {
-          record = (await apiJson('/api/trackers/add', { method: 'POST', body: JSON.stringify({ deviceId: identity.deviceId, name: device.name || 'OpenTag tracker' }) })).tracker;
-        } catch (error) {
-          try { device.gatt.disconnect(); } catch (_) { }
-          throw error;
-        }
-        if (!identity.stable) log('This tracker has no permanent hardware ID (old firmware), so only this browser can connect to it. Flash the current OpenTag firmware for use on several devices.');
-        await refreshSharedState();
-        record = ownedTrackers.find(t => t.trackerId === record.trackerId) || record;
-        if (!ownedTrackers.includes(record)) ownedTrackers.push(record);
-        connectingTrackerId = record.trackerId;
-        selectTracker(record.trackerId, false);
-        try { await startTracking(device, record, identity); }
-        catch (error) { throw new Error(`${record.name} was added to your account, but this browser cannot follow it yet: ${explainBleFailure(error, record)}`); }
-      });
-    }
-    function applyRebind(oldRecord, newRecord) {
-      const oldState = sharedStates.get(oldRecord.trackerId);
-      const wasSelected = selectedTrackerId === oldRecord.trackerId;
-      forgetTracker(oldRecord.trackerId);
-      if (!ownedTrackers.some(t => t.trackerId === newRecord.trackerId)) ownedTrackers.push(newRecord);
-      if (wasSelected) selectedTrackerId = newRecord.trackerId;
-      if (oldState && !sharedStates.has(newRecord.trackerId)) renderState({ ...oldState, trackerId: newRecord.trackerId, deviceId: newRecord.deviceId, trackerName: newRecord.name });
-    }
-    function connectOrDisconnect(trackerId) {
-      const record = ownedTrackers.find(item => item.trackerId === trackerId);
-      if (!record) return;
-      if (activeTracker?.trackerId === trackerId) { stopActiveTracking(); return; }
-      if (userBleBusy) return;
-      selectTracker(trackerId, true);
-      if (!bluetoothAvailable()) return;
-      const known = sessionDevices.get(trackerId);
-      const chosen = known ? Promise.resolve(known) : navigator.bluetooth.requestDevice(REQUEST_OPTIONS);
-      chosen.catch(() => { });
-      userBleAction('Tracker connection', trackerId, async () => {
-        const device = await chosen;
-        if (device === activeDevice && activeTracker) {
-          log(`You picked ${activeTracker.name}, which is already connected in this browser.`);
-          selectTracker(activeTracker.trackerId, false);
-          return;
-        }
-        let identity;
-        try { identity = await openTracker(device); }
-        catch (error) { if (known) sessionDevices.delete(trackerId); throw error; }
-        let target = record;
-        try {
-          if (!identity.stable) {
-            if (identity.deviceId !== record.deviceId) throw new Error(`The device you picked has no permanent hardware ID (old firmware), so it cannot be matched to ${record.name}. Flash the current OpenTag firmware to it.`);
-          } else if (identity.deviceId !== record.deviceId) {
-            const match = ownedTrackers.find(t => t.deviceId === identity.deviceId);
-            if (match) {
-              log(`You picked ${match.name} in the Bluetooth chooser, so that tracker was connected instead of ${record.name}.`);
-              target = match;
-            } else if (record.legacy || isTemporaryId(record.deviceId)) {
-              const rebound = (await apiJson('/api/trackers/rebind', { method: 'POST', body: JSON.stringify({ trackerId: record.trackerId, deviceId: identity.deviceId }) })).tracker;
-              applyRebind(record, rebound);
-              await refreshSharedState();
-              target = ownedTrackers.find(t => t.deviceId === identity.deviceId) || rebound;
-              log(`${target.name} is now identified by its permanent hardware ID.`);
-            } else {
-              throw new Error(`The device you picked (${device.name || 'unnamed'}) is not ${record.name}, and it is not registered in your account. Pick ${record.name} in the Bluetooth chooser, or use “Add tracker” to register the other one.`);
-            }
-          }
-        } catch (error) {
-          try { device.gatt.disconnect(); } catch (_) { }
-          throw error;
-        }
-        connectingTrackerId = target.trackerId;
-        selectTracker(target.trackerId, false);
-        await startTracking(device, target, identity);
-      });
-    }
-    async function setSelectedTrackerMode(mode) {
-      const characteristic = modeCharacteristic;
-      if (modeBusy || !linkUp || !characteristic || activeTracker?.trackerId !== selectedTrackerId) {
-        updateDashboard();
-        return;
-      }
-      const wanted = mode === 'lost' ? 1 : 0;
-      modeBusy = true;
-      $('modeToggle').disabled = true;
-      try {
-        await gattStep('writing the mode', characteristic.writeValueWithResponse(new Uint8Array([wanted])));
-        await sleep(100);
-        const actual = (await gattStep('confirming the mode', characteristic.readValue())).getUint8(0);
-        if (actual !== wanted) throw new Error('Tracker did not confirm the requested mode.');
-        applyLocalState({ trackerMode: mode });
-        log(`Tracker mode changed to ${mode.toUpperCase()}.`);
-      } catch (error) {
-        log(`Mode change failed: ${error.message}`);
-        alert(`Could not change tracker mode: ${error.message}`);
-      } finally {
-        modeBusy = false;
-        updateDashboard();
-      }
-    }
-    async function renameTracker(trackerId) {
-      const record = ownedTrackers.find(t => t.trackerId === trackerId);
-      if (!record) return;
-      const name = prompt('New tracker name:', record.name);
-      if (name === null) return;
-      try {
-        const result = await apiJson('/api/trackers/rename', { method: 'POST', body: JSON.stringify({ trackerId, name }) });
-        record.name = result.tracker?.name || name.trim();
-        const state = getState(trackerId);
-        if (state) state.trackerName = record.name;
-        popupCache.delete(trackerId);
-        renderTrackerList();
-        updateDashboard();
-      } catch (error) { alert(describeError(error)); }
-    }
-    async function removeTracker(trackerId) {
-      const record = ownedTrackers.find(t => t.trackerId === trackerId);
-      if (!record) return;
-      if (!confirm(`Remove ${record.name} from this account? Its saved location will also be deleted.`)) return;
-      if (activeTracker?.trackerId === trackerId) stopActiveTracking();
-      try {
-        await apiJson('/api/trackers/remove', { method: 'POST', body: JSON.stringify({ trackerId }) });
-        forgetTracker(trackerId);
-      } catch (error) { alert(describeError(error)); }
-    }
-
-    function setAuthMode(mode) {
-      authMode = mode === 'register' ? 'register' : 'login';
-      const registering = authMode === 'register';
-      $('authTitle').textContent = registering ? 'Create an OpenTag account' : 'Sign in to OpenTag';
-      $('authDescription').textContent = registering ? 'Create an account to keep your trackers separate from other users.' : 'Sign in to see the trackers belonging to your account.';
-      $('authSubmit').textContent = registering ? 'Create account' : 'Sign in';
-      $('authSwitch').textContent = registering ? 'I already have an account' : 'Create account';
-      $('authPassword').setAttribute('autocomplete', registering ? 'new-password' : 'current-password');
-    }
-    function showSignIn(message = '') {
-      authenticated = false;
-      $('trackerApp').hidden = true;
-      $('authPanel').hidden = false;
-      $('authError').textContent = message;
-      if (locationWatchId !== null && navigator.geolocation) { navigator.geolocation.clearWatch(locationWatchId); locationWatchId = null; }
-      clearInterval(statePollTimer); statePollTimer = null;
-      clearInterval(tickTimer); tickTimer = null;
-      clearTimeout(reconnectTimer); reconnectTimer = null;
-      try { sharedSocket?.close(); } catch (_) { }
-      sharedSocket = null;
-      stopActiveTracking(false);
-      for (const id of [...sharedStates.keys()]) removeTrackerLayers(id);
-      sessionDevices.clear();
-      ownedTrackers = [];
-      selectedTrackerId = null;
-      firstMapFitDone = false; initialStateSynced = false;
-      lastListHtml = ''; backendOutdated = false; reconnectDelay = 1000;
-      setBackendState('sign in required', false);
-    }
-    async function activateUser(user) {
-      authenticated = true;
-      $('currentUsername').textContent = user.username;
-      $('authPanel').hidden = true;
-      $('trackerApp').hidden = false;
-      $('authError').textContent = '';
-      setTimeout(() => map.invalidateSize({ pan: false }), 100);
-      connectBackend();
-      startLocation();
-      if (!tickTimer) tickTimer = setInterval(tick, 1000);
-      await startStatePolling();
-      log(`Signed in as ${user.username}.`);
-      restoreRememberedDevices();
-    }
-    async function restoreRememberedDevices() {
-      if (!navigator.bluetooth?.getDevices) return;
-      let devices = [];
-      try { devices = await navigator.bluetooth.getDevices(); } catch (_) { return; }
-      for (const record of ownedTrackers) {
-        const device = devices.find(d => d.id === bleDeviceMap[record.trackerId]);
-        if (device && !sessionDevices.has(record.trackerId)) sessionDevices.set(record.trackerId, device);
-      }
-      const record = currentSelectedRecord();
-      const device = record && sessionDevices.get(record.trackerId);
-      if (!device || isTemporaryId(record.deviceId)) return;
-      queueBle(async () => {
-        if (activeTracker || userBleBusy || !authenticated) return;
-        try {
-          const identity = await openTracker(device, 1);
-          if (identity.deviceId !== record.deviceId) { try { device.gatt.disconnect(); } catch (_) { } return; }
-          await startTracking(device, record, identity);
-          log(`Restored the Bluetooth connection to ${record.name}.`);
-        } catch (_) { /* not in range right now: the user can press Connect */ }
-      });
-    }
-    async function checkSession() {
-      try {
-        const result = await apiJson('/api/auth/me');
-        if (result.authenticated && result.user) await activateUser(result.user); else showSignIn('');
-      } catch (_) { showSignIn('Cannot reach the OpenTag backend. Check the network connection and try again.'); }
-    }
-
-    $('menuBtn').addEventListener('click', () => {
-      const menu = $('trackerMenu');
-      menu.hidden = !menu.hidden;
-      $('menuBtn').setAttribute('aria-expanded', String(!menu.hidden));
-      if (!menu.hidden) renderTrackerList();
+function now() { return Date.now(); }
+function finiteNumber(value) {
+  if (typeof value === 'string') { if (!value.trim()) return null; }
+  else if (typeof value !== 'number') return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+function validLatitude(value) {
+  const n = finiteNumber(value);
+  return n !== null && n >= -90 && n <= 90;
+}
+function validLongitude(value) {
+  const n = finiteNumber(value);
+  return n !== null && n >= -180 && n <= 180;
+}
+function clampText(value, maxLength) {
+  if (typeof value !== 'string') return '';
+  return value.trim().slice(0, maxLength);
+}
+function jsonResponse(response, statusCode, data, extraHeaders = {}) {
+  response.writeHead(statusCode, {
+    'Content-Type': 'application/json; charset=utf-8',
+    'Cache-Control': 'no-store',
+    'X-Content-Type-Options': 'nosniff',
+    ...extraHeaders,
+  });
+  response.end(JSON.stringify(data));
+}
+function safeUser(user) {
+  return {
+    id: user.id,
+    username: user.username,
+    createdAt: user.createdAt
+  };
+}
+function hashSession(token) {
+  return crypto.createHash('sha256').update(token).digest('hex');
+}
+function parseCookies(header) {
+  const out = Object.create(null);
+  for (const part of String(header || '').split(';')) {
+    const index = part.indexOf('=');
+    if (index < 1) continue;
+    const key = part.slice(0, index).trim();
+    const value = part.slice(index + 1).trim();
+    try {
+      out[key] = decodeURIComponent(value);
+    } catch (_) {
+      out[key] = value;
+    }
+  }
+  return out;
+}
+function isSecureRequest(request) {
+  const forwarded = String(request.headers['x-forwarded-proto'] || '').split(',')[0].trim().toLowerCase();
+  return request.socket.encrypted === true || forwarded === 'https';
+}
+function cookieHeader(request, token, maxAgeSeconds) {
+  const bits = [`${SESSION_COOKIE}=${encodeURIComponent(token)}`, 'Path=/', 'HttpOnly', 'SameSite=Lax', `Max-Age=${maxAgeSeconds}`];
+  if (isSecureRequest(request)) bits.push('Secure');
+  return bits.join('; ');
+}
+function setSessionCookie(request, response, token) {
+  response.setHeader('Set-Cookie', cookieHeader(request, token, Math.floor(SESSION_TTL_MS / 1000)));
+}
+function clearSessionCookie(request, response) {
+  response.setHeader('Set-Cookie', cookieHeader(request, '', 0));
+}
+function getSessionUser(request) {
+  const cookies = parseCookies(request.headers.cookie);
+  const token = cookies[SESSION_COOKIE];
+  if (!token) return null;
+  const key = hashSession(token);
+  const session = sessions.get(key);
+  if (!session) return null;
+  if (session.expiresAt <= now()) {
+    sessions.delete(key);
+    return null;
+  }
+  const user = users.get(session.userId);
+  if (!user) {
+    sessions.delete(key);
+    return null;
+  }
+  return user;
+}
+function createSession(user) {
+  const token = crypto.randomBytes(32).toString('base64url');
+  sessions.set(hashSession(token), {
+    userId: user.id,
+    expiresAt: now() + SESSION_TTL_MS
+  });
+  return token;
+}
+function getClientIp(request) {
+  const parts = String(request.headers['x-forwarded-for'] || '').split(',').map(p => p.trim()).filter(Boolean);
+  if (TRUSTED_PROXY_HOPS > 0 && parts.length) {
+    return parts[Math.max(0, parts.length - TRUSTED_PROXY_HOPS)];
+  }
+  return request.socket.remoteAddress || 'unknown';
+}
+function rateLimitAuth(request, response, route) {
+  const key = `${route}:${getClientIp(request)}`;
+  const cutoff = now() - RATE_WINDOW_MS;
+  const timestamps = (authRateLimits.get(key) || []).filter(time => time > cutoff);
+  if (timestamps.length >= 12) {
+    authRateLimits.set(key, timestamps);
+    jsonResponse(response, 429, { error: 'Too many attempts. Please wait 15 minutes and try again.' }, { 'Retry-After': '900' });
+    return false;
+  }
+  timestamps.push(now());
+  authRateLimits.set(key, timestamps);
+  return true;
+}
+async function readJsonBody(request) {
+  const contentType = String(request.headers['content-type'] || '').toLowerCase();
+  if (!contentType.startsWith('application/json')) {
+    const error = new Error('Content-Type must be application/json');
+    error.statusCode = 415;
+    throw error;
+  }
+  const declaredLength = Number(request.headers['content-length'] || 0);
+  if (declaredLength > MAX_BODY_BYTES) {
+    const error = new Error('Request body is too large');
+    error.statusCode = 413;
+    throw error;
+  }
+  const chunks = [];
+  let total = 0;
+  for await (const chunk of request) {
+    total += chunk.length;
+    if (total > MAX_BODY_BYTES) {
+      const error = new Error('Request body is too large');
+      error.statusCode = 413;
+      throw error;
+    }
+    chunks.push(chunk);
+  }
+  try {
+    const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    if (!body || typeof body !== 'object' || Array.isArray(body)) throw new Error('Expected an object');
+    return body;
+  } catch (_) {
+    const error = new Error('Invalid JSON body');
+    error.statusCode = 400;
+    throw error;
+  }
+}
+function lastKnownJson() {
+  return JSON.stringify([...lastKnown.values()].map(({ reporterId, ...rest }) => rest));
+}
+function scheduleSave() {
+  if (!DATA_FILE) return;
+  dirty = true;
+  if (saveTimer || saving) return;
+  saveTimer = setTimeout(persistLastKnown, 5000);
+}
+async function persistLastKnown() {
+  saveTimer = null;
+  if (!dirty || !DATA_FILE) return;
+  dirty = false;
+  saving = true;
+  const tmp = `${DATA_FILE}.tmp`;
+  try {
+    await fs.promises.mkdir(path.dirname(DATA_FILE), { recursive: true });
+    await fs.promises.writeFile(tmp, lastKnownJson(), { mode: 0o600 });
+    await fs.promises.rename(tmp, DATA_FILE);
+  } catch (error) {
+    dirty = true;
+    console.warn(`Could not save ${DATA_FILE}: ${error.message}`);
+  } finally {
+    saving = false;
+    if (dirty && !saveTimer) saveTimer = setTimeout(persistLastKnown, 5000);
+  }
+}
+function flushLastKnownSync() {
+  if (!DATA_FILE || !dirty) return;
+  const tmp = `${DATA_FILE}.tmp`;
+  try {
+    fs.mkdirSync(path.dirname(DATA_FILE), { recursive: true });
+    fs.writeFileSync(tmp, lastKnownJson(), { mode: 0o600 });
+    fs.renameSync(tmp, DATA_FILE);
+    dirty = false;
+  } catch (error) {
+    console.warn(`Could not save ${DATA_FILE}: ${error.message}`);
+  }
+}
+function saveLastKnownNow() {
+  dirty = true;
+  flushLastKnownSync();
+}
+function saveUsers() {
+  if (!AUTH_FILE) {
+    console.warn('AUTH_FILE is not configured; registered users will not survive a restart. Configure a persistent /data directory.');
+    return;
+  }
+  const tmp = `${AUTH_FILE}.tmp`;
+  try {
+    fs.mkdirSync(path.dirname(AUTH_FILE), {
+      recursive: true
     });
-    document.addEventListener('click', event => {
-      const path = event.composedPath ? event.composedPath() : [];
-      if (!$('trackerMenu').hidden && !path.includes($('trackerMenu')) && !path.includes($('menuBtn'))) closeMenu();
+    fs.writeFileSync(tmp, JSON.stringify({
+      version: 1,
+      users: [...users.values()]
+    }), {
+      mode: 0o600
     });
-    $('addTrackerBtn').addEventListener('click', addTracker);
-    $('trackerList').addEventListener('click', event => {
-      const el = event.target.closest('[data-select],[data-connect],[data-rename],[data-remove]');
-      if (!el) return;
-      if (el.dataset.select) selectTracker(el.dataset.select, true);
-      else if (el.dataset.connect) connectOrDisconnect(el.dataset.connect);
-      else if (el.dataset.rename) renameTracker(el.dataset.rename);
-      else if (el.dataset.remove) removeTracker(el.dataset.remove);
+    fs.renameSync(tmp, AUTH_FILE);
+  } catch (error) {
+    console.error(`Could not save authentication database ${AUTH_FILE}: ${error.message}`);
+    throw new Error('Could not save account data. Check that the persistent data directory is writable.');
+  }
+}
+function loadUsers() {
+  if (!AUTH_FILE) {
+    console.warn('AUTH_FILE is not configured; account database will be memory-only.');
+    return;
+  }
+  try {
+    const parsed = JSON.parse(fs.readFileSync(AUTH_FILE, 'utf8'));
+    for (const item of Array.isArray(parsed.users) ? parsed.users : []) {
+      if (!item || typeof item.id !== 'string' || typeof item.username !== 'string' ||
+          typeof item.passwordSalt !== 'string' || typeof item.passwordHash !== 'string') continue;
+      if (usersByName.has(item.username)) continue;
+      users.set(item.id, item);
+      usersByName.set(item.username, item);
+    }
+    console.log(`Loaded ${users.size} account(s) from ${AUTH_FILE}`);
+  } catch (error) {
+    if (error.code !== 'ENOENT') console.error(`Could not load account database: ${error.message}`);
+  }
+}
+function saveTrackers() {
+  if (!TRACKERS_FILE) {
+    console.warn('TRACKERS_FILE is not configured; tracker registry will be memory-only.');
+    return;
+  }
+  const tmp = `${TRACKERS_FILE}.tmp`;
+  try {
+    fs.mkdirSync(path.dirname(TRACKERS_FILE), {
+      recursive: true
     });
-    $('trackerList').addEventListener('pointerdown', () => { listPointerDown = true; });
-    for (const type of ['pointerup', 'pointercancel']) document.addEventListener(type, () => { listPointerDown = false; });
-    $('modeToggle').addEventListener('change', event => setSelectedTrackerMode(event.target.checked ? 'lost' : 'normal'));
-    $('authSwitch').addEventListener('click', () => setAuthMode(authMode === 'login' ? 'register' : 'login'));
-    $('authForm').addEventListener('submit', async event => {
-      event.preventDefault();
-      const username = $('authUsername').value.trim(), password = $('authPassword').value;
-      const endpoint = authMode === 'register' ? '/api/auth/register' : '/api/auth/login';
-      $('authSubmit').disabled = true;
-      $('authError').textContent = authMode === 'register' ? 'Creating account…' : 'Signing in…';
-      try {
-        const result = await apiJson(endpoint, { method: 'POST', body: JSON.stringify({ username, password }) });
-        if (!result.user) throw new Error('Unexpected response from the server.');
-        $('authPassword').value = '';
-        await activateUser(result.user);
-      } catch (error) { $('authError').textContent = error.message; }
-      finally { $('authSubmit').disabled = false; }
+    fs.writeFileSync(tmp, JSON.stringify({
+      version: 2,
+      trackers: [...ownedTrackers.values()]
+    }), {
+      mode: 0o600
     });
-    $('logoutBtn').addEventListener('click', async () => {
-      stopActiveTracking();
-      try { await apiJson('/api/auth/logout', { method: 'POST', body: '{}' }); } catch (_) { }
-      showSignIn('You have signed out.');
-      setAuthMode('login');
+    fs.renameSync(tmp, TRACKERS_FILE);
+  } catch (error) {
+    console.error(`Could not save tracker registry ${TRACKERS_FILE}: ${error.message}`);
+    throw new Error('Could not save tracker registry. Check that the persistent data directory is writable.');
+  }
+}
+function loadTrackers() {
+  if (!TRACKERS_FILE) {
+    console.warn('TRACKERS_FILE is not configured; tracker registry will be memory-only.');
+    return;
+  }
+  try {
+    const parsed = JSON.parse(fs.readFileSync(TRACKERS_FILE, 'utf8'));
+    for (const item of Array.isArray(parsed.trackers) ? parsed.trackers : []) {
+      if (!item || typeof item.trackerId !== 'string' || typeof item.userId !== 'string' ||
+        typeof item.deviceId !== 'string' || typeof item.name !== 'string') continue;
+      ownedTrackers.set(item.trackerId, item);
+    }
+    console.log(`Loaded ${ownedTrackers.size} registered tracker(s) from ${TRACKERS_FILE}`);
+  } catch (error) {
+    if (error.code !== 'ENOENT') console.error(`Could not load tracker registry: ${error.message}`);
+  }
+}
+function publicTracker(record) {
+  const { userId, ...safe } = record;
+  return safe;
+}
+function trackersForUser(userId) {
+  return [...ownedTrackers.values()]
+    .filter(item => item.userId === userId)
+    .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0))
+    .map(publicTracker);
+}
+function findTrackerForUser(userId, deviceIdOrName) {
+  const value = clampText(deviceIdOrName, MAX_DEVICE_ID_LENGTH);
+  if (!value) return null;
+  const exact = ownedTrackers.get(scopedTrackerId(userId, value));
+  if (exact) return exact;
+  for (const item of ownedTrackers.values()) if (item.userId === userId && item.name === value) return item;
+  return null;
+}
+function ensureLegacyTrackerRecords() {
+  let registryChanged = false;
+  let positionsChanged = false;
+  for (const [oldKey, state] of [...lastKnown.entries()]) {
+    if (!state.userId || ownedTrackers.has(oldKey)) continue;
+    if (state.deviceId) {
+      lastKnown.delete(oldKey);
+      positionsChanged = true;
+      continue;
+    }
+    const prefix = `${state.userId}:`;
+    const legacyName = oldKey.startsWith(prefix) ? oldKey.slice(prefix.length) : (state.trackerName || oldKey);
+    const deviceId = `legacy-${legacyName.replace(/[^a-zA-Z0-9._-]/g, '-').slice(0, 80)}`;
+    const newKey = scopedTrackerId(state.userId, deviceId);
+    const record = {
+      trackerId: newKey,
+      deviceId,
+      userId: state.userId,
+      name: clampText(state.trackerName || legacyName, 48) || 'OpenTag tracker',
+      createdAt: state.updatedAt || now(),
+      updatedAt: now(),
+      legacy: true,
+    };
+    ownedTrackers.set(newKey, record);
+    lastKnown.delete(oldKey);
+    lastKnown.set(newKey, { ...state, trackerId: newKey, deviceId, trackerName: record.name, userId: state.userId, live: false });
+    registryChanged = positionsChanged = true;
+  }
+  if (registryChanged) {
+    saveTrackers();
+    console.log('Migrated previously saved tracker positions into the v2 tracker registry.');
+  }
+  if (positionsChanged) saveLastKnownNow();
+}
+function migrateLegacyNamedTracker(userId, name, deviceId) {
+  const normalizedName = name.toLowerCase();
+  let legacy = null;
+  for (const item of ownedTrackers.values()) {
+    if (item.userId !== userId || !item.legacy) continue;
+    const legacyName = item.name.toLowerCase();
+    if (legacyName === normalizedName || normalizedName.startsWith(`${legacyName}-`)) { legacy = item; break; }
+  }
+  if (!legacy) return null;
+  const oldKey = legacy.trackerId;
+  const newKey = scopedTrackerId(userId, deviceId);
+  const updated = { ...legacy, trackerId: newKey, deviceId, legacy: false, updatedAt: now() };
+  ownedTrackers.delete(oldKey);
+  ownedTrackers.set(newKey, updated);
+  try { saveTrackers(); }
+  catch (error) { ownedTrackers.delete(newKey); ownedTrackers.set(oldKey, legacy); throw error; }
+  const previous = lastKnown.get(oldKey);
+  if (previous) {
+    lastKnown.delete(oldKey);
+    lastKnown.set(newKey, { ...previous, trackerId: newKey, deviceId, trackerName: updated.name });
+  }
+  const live = trackerStates.get(oldKey);
+  if (live) {
+    trackerStates.delete(oldKey);
+    trackerStates.set(newKey, { ...live, trackerId: newKey, deviceId, trackerName: updated.name });
+  }
+  if (previous) saveLastKnownNow();
+  return updated;
+}
+function httpError(statusCode, message) {
+  const error = new Error(message);
+  error.statusCode = statusCode;
+  return error;
+}
+function registerTracker(user, body) {
+  const deviceId = typeof body.deviceId === 'string' ? body.deviceId.trim() : '';
+  const name = clampText(body.name || 'OpenTag tracker', 48);
+  if (!new RegExp(`^[a-zA-Z0-9._:-]{6,${MAX_DEVICE_ID_LENGTH}}$`).test(deviceId)) {
+    throw httpError(400, 'Invalid tracker hardware ID. Update the tracker firmware and try again.');
+  }
+  if (!name) throw httpError(400, 'Tracker name is required.');
+  for (const item of ownedTrackers.values()) {
+    if (item.deviceId === deviceId && item.userId !== user.id) {
+      throw httpError(409, 'This tracker is already registered to another account.');
+    }
+  }
+  const key = scopedTrackerId(user.id, deviceId);
+  const existing = ownedTrackers.get(key);
+  if (existing) return publicTracker(existing);
+  const migrated = migrateLegacyNamedTracker(user.id, name, deviceId);
+  if (migrated) return publicTracker(migrated);
+  let count = 0;
+  for (const item of ownedTrackers.values()) if (item.userId === user.id) count++;
+  if (count >= MAX_TRACKERS_PER_USER) throw httpError(409, `This account can register up to ${MAX_TRACKERS_PER_USER} trackers.`);
+  const record = { trackerId: key, deviceId, userId: user.id, name, createdAt: now(), updatedAt: now(), legacy: false };
+  ownedTrackers.set(key, record);
+  try { saveTrackers(); }
+  catch (error) { ownedTrackers.delete(key); throw error; }
+  broadcastToUser(user.id, { type: 'trackerAdded', tracker: publicTracker(record) });
+  return publicTracker(record);
+}
+function isTemporaryDeviceId(deviceId) {
+  return String(deviceId || '').startsWith('browser-') || String(deviceId || '').startsWith('legacy-');
+}
+function rebindTracker(user, body) {
+  const oldTrackerId = clampText(body.trackerId, 160);
+  const deviceId = typeof body.deviceId === 'string' ? body.deviceId.trim() : '';
+  const record = ownedTrackers.get(oldTrackerId);
+  if (!record || record.userId !== user.id) throw httpError(404, 'Tracker not found in this account.');
+  if (!new RegExp(`^[a-zA-Z0-9._:-]{6,${MAX_DEVICE_ID_LENGTH}}$`).test(deviceId) || isTemporaryDeviceId(deviceId)) {
+    throw httpError(400, 'A permanent tracker hardware ID is required. Update the tracker firmware and try again.');
+  }
+  const newTrackerId = scopedTrackerId(user.id, deviceId);
+  if (newTrackerId === oldTrackerId) return publicTracker(record);
+  if (!record.legacy && !isTemporaryDeviceId(record.deviceId)) {
+    throw httpError(409, 'This tracker already has a permanent hardware ID and cannot be rebound automatically.');
+  }
+  for (const item of ownedTrackers.values()) {
+    if (item.deviceId === deviceId && item.userId !== user.id) throw httpError(409, 'This tracker is already registered to another account.');
+  }
+  const existing = ownedTrackers.get(newTrackerId);
+  const previousKnown = lastKnown.get(oldTrackerId);
+  const previousLive = trackerStates.get(oldTrackerId);
+  if (existing) {
+    ownedTrackers.delete(oldTrackerId);
+    try { saveTrackers(); }
+    catch (error) { ownedTrackers.set(oldTrackerId, record); throw error; }
+    const currentKnown = lastKnown.get(newTrackerId);
+    if (previousKnown && (!currentKnown || (previousKnown.updatedAt || 0) > (currentKnown.updatedAt || 0))) {
+      lastKnown.set(newTrackerId, { ...previousKnown, trackerId: newTrackerId, deviceId, trackerName: existing.name });
+    }
+    lastKnown.delete(oldTrackerId);
+    trackerStates.delete(oldTrackerId);
+    saveLastKnownNow();
+    broadcastToUser(user.id, { type: 'trackerDeleted', trackerId: oldTrackerId, reason: 'tracker_rebound' });
+    return publicTracker(existing);
+  }
+  const updated = { ...record, trackerId: newTrackerId, deviceId, legacy: false, updatedAt: now() };
+  ownedTrackers.delete(oldTrackerId);
+  ownedTrackers.set(newTrackerId, updated);
+  try { saveTrackers(); }
+  catch (error) { ownedTrackers.delete(newTrackerId); ownedTrackers.set(oldTrackerId, record); throw error; }
+  if (previousKnown) {
+    lastKnown.delete(oldTrackerId);
+    lastKnown.set(newTrackerId, { ...previousKnown, trackerId: newTrackerId, deviceId, trackerName: updated.name });
+  }
+  if (previousLive) {
+    trackerStates.delete(oldTrackerId);
+    trackerStates.set(newTrackerId, { ...previousLive, trackerId: newTrackerId, deviceId, trackerName: updated.name });
+  }
+  if (previousKnown) saveLastKnownNow();
+  broadcastToUser(user.id, { type: 'trackerDeleted', trackerId: oldTrackerId, reason: 'tracker_rebound' });
+  return publicTracker(updated);
+}
+function renameTracker(user, body) {
+  const trackerId = clampText(body.trackerId, 160);
+  const name = clampText(body.name, 48);
+  const record = ownedTrackers.get(trackerId);
+  if (!record || record.userId !== user.id) throw httpError(404, 'Tracker not found in this account.');
+  if (!name) throw httpError(400, 'Tracker name is required.');
+  const previousName = record.name;
+  const previousUpdatedAt = record.updatedAt;
+  record.name = name;
+  record.updatedAt = now();
+  try { saveTrackers(); }
+  catch (error) { record.name = previousName; record.updatedAt = previousUpdatedAt; throw error; }
+  for (const stateMap of [trackerStates, lastKnown]) {
+    const state = stateMap.get(trackerId);
+    if (state) state.trackerName = name;
+  }
+  scheduleSave();
+  broadcastToUser(user.id, { type: 'trackerRenamed', trackerId, name });
+  return publicTracker(record);
+}
+function deleteTracker(user, body) {
+  const trackerId = clampText(body.trackerId, 160);
+  const record = ownedTrackers.get(trackerId);
+  if (!record || record.userId !== user.id) throw httpError(404, 'Tracker not found in this account.');
+  ownedTrackers.delete(trackerId);
+  try { saveTrackers(); }
+  catch (error) { ownedTrackers.set(trackerId, record); throw error; }
+  trackerStates.delete(trackerId);
+  lastKnown.delete(trackerId);
+  saveLastKnownNow();
+  broadcastToUser(user.id, { type: 'trackerDeleted', trackerId });
+  return true;
+}
+
+function sanitizeLocation(location) {
+  if (!location || !validLatitude(location.lat) || !validLongitude(location.lng)) return null;
+  const accuracy = finiteNumber(location.accuracy);
+  return {
+    lat: Number(location.lat),
+    lng: Number(location.lng),
+    accuracy: accuracy !== null && accuracy >= 0 && accuracy <= 100000 ? accuracy : null,
+  };
+}
+function scopedTrackerId(userId, rawTrackerId) {
+  const clean = clampText(rawTrackerId, 100);
+  return clean ? `${userId}:${clean}` : '';
+}
+function loadLastKnown() {
+  if (!DATA_FILE) return;
+  try {
+    const data = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
+    for (const item of Array.isArray(data) ? data : []) {
+      const location = sanitizeLocation(item && item.location);
+      const trackerId = clampText(item && item.trackerId, 140);
+      if (!trackerId || !location) continue;
+      const savedState = {
+        ...item
+      };
+      const legacyMode = savedState.mode;
+      savedState.trackerMode = ['normal', 'lost'].includes(savedState.trackerMode)
+        ? savedState.trackerMode
+        : (['normal', 'lost'].includes(legacyMode) ? legacyMode : null);
+      delete savedState.mode;
+      delete savedState.reporterId;
+      lastKnown.set(trackerId, {
+        ...savedState,
+        trackerId,
+        location,
+        live: false
+      });
+    }
+    console.log(`Loaded ${lastKnown.size} last known position(s) from ${DATA_FILE}`);
+  } catch (error) {
+    if (error.code !== 'ENOENT') console.warn(`Could not load ${DATA_FILE}: ${error.message}`);
+  }
+}
+function migrateLegacyPositionsToFirstUser(userId) {
+  let changed = false;
+  for (const [oldId, item] of [...lastKnown.entries()]) {
+    if (item.userId) continue;
+    const rawId = clampText(item.trackerName || item.trackerId || oldId, 100);
+    const deviceId = `legacy-${rawId.replace(/[^a-zA-Z0-9._-]/g, '-').slice(0, 80)}`;
+    const newId = scopedTrackerId(userId, deviceId);
+    lastKnown.delete(oldId);
+    lastKnown.set(newId, {
+      ...item,
+      trackerId: newId,
+      deviceId,
+      trackerName: item.trackerName || rawId,
+      userId,
+      live: false
     });
-    document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState !== 'visible' || !authenticated) return;
-      refreshSharedState();
-      if (!activeTracker) return;
-      if (linkUp && linkKind === 'gatt' && !activeDevice.gatt?.connected) linkLost('Bluetooth connection lost while the page was in the background.');
-      else if (!linkUp && !bleRetryTimer) scheduleBleRetry(0);
+    ownedTrackers.set(newId, {
+      trackerId: newId,
+      deviceId,
+      userId,
+      name: clampText(item.trackerName || rawId, 48),
+      createdAt: item.updatedAt || now(),
+      updatedAt: now(),
+      legacy: true
     });
-    window.addEventListener('pagehide', () => {
-      if (activeTracker && !stopSent) sendWs({ type: 'trackerStop', deviceId: activeTracker.deviceId });
-      try { activeDevice?.gatt?.disconnect(); } catch (_) { }
-      try { sharedSocket?.close(); } catch (_) { }
+    changed = true;
+  }
+  if (changed) {
+    console.log(`Migrated legacy unowned position(s) to the first account (${userId}).`);
+    saveTrackers();
+    saveLastKnownNow();
+  }
+}
+function lastKnownSnapshot(userId) {
+  return [...lastKnown.values()]
+    .filter(state => state.userId === userId)
+    .map(publicState);
+}
+function publicState(state) {
+  const { userId, reporterId, ...safe } = state;
+  return safe;
+}
+function removeStaleTrackers() {
+  const cutoff = now() - TRACKER_TTL_MS;
+  for (const [trackerId, state] of trackerStates) {
+    if (state.updatedAt >= cutoff) continue;
+    trackerStates.delete(trackerId);
+    broadcastTrackerRemoved(state.userId, trackerId, 'stale');
+  }
+}
+function stateSnapshot(userId) {
+  removeStaleTrackers();
+  const states = [];
+  for (const state of trackerStates.values()) {
+    if (state.userId === userId) states.push(publicState(state));
+  }
+  return states;
+}
+function broadcastTrackerRemoved(userId, trackerId, reason) {
+  const known = lastKnown.get(trackerId);
+  broadcastToUser(userId, {
+    type: 'trackerRemoved', trackerId,
+    lastKnown: known ? publicState(known) : null,
+    reason, at: now(),
+  });
+}
+function sanitizeReport(message, client) {
+  const rawDeviceId = clampText(message.deviceId || message.trackerId, MAX_DEVICE_ID_LENGTH);
+  if (!rawDeviceId) throw new Error('deviceId is required');
+  const record = findTrackerForUser(client.userId, rawDeviceId);
+  if (!record) throw new Error('This tracker is not registered to your account. Add it from the tracker menu first.');
+  const rssi = finiteNumber(message.rssi);
+  const txPower = finiteNumber(message.txPower);
+  const distanceM = finiteNumber(message.distanceM);
+  const location = sanitizeLocation(message.location);
+  const trackerMode = ['normal', 'lost'].includes(message.trackerMode) ? message.trackerMode : null;
+  const blePacketAt = finiteNumber(message.lastBlePacketAt);
+  return {
+    trackerId: record.trackerId,
+    deviceId: record.deviceId,
+    trackerName: record.name,
+    location,
+    rssi: rssi !== null && rssi >= -150 && rssi <= 0 ? rssi : null,
+    txPower: txPower !== null && txPower >= -100 && txPower <= 30 ? txPower : null,
+    distanceM: distanceM !== null && distanceM >= 0 && distanceM <= 100000 ? distanceM : null,
+    trackerMode,
+    live: true,
+    userId: client.userId,
+    reporterId: client.clientId,
+    updatedAt: now(),
+    lastBlePacketAt: blePacketAt !== null && blePacketAt > 0 && blePacketAt <= now() ? blePacketAt : now(),
+  };
+}
+function sendFrame(socket, opcode, payloadBuffer = Buffer.alloc(0)) {
+  if (socket.destroyed) return;
+  const payload = Buffer.isBuffer(payloadBuffer) ? payloadBuffer : Buffer.from(payloadBuffer);
+  let header;
+  if (payload.length < 126) {
+    header = Buffer.from([0x80 | opcode, payload.length]);
+  } else if (payload.length < 65536) {
+    header = Buffer.alloc(4);
+    header[0] = 0x80 | opcode;
+    header[1] = 126;
+    header.writeUInt16BE(payload.length, 2);
+  } else {
+    header = Buffer.alloc(10);
+    header[0] = 0x80 | opcode;
+    header[1] = 127;
+    header.writeBigUInt64BE(BigInt(payload.length), 2);
+  }
+  if (socket.writableLength > MAX_WS_BACKLOG_BYTES) { socket.destroy(); return; }
+  socket.write(Buffer.concat([header, payload]));
+}
+function sendJson(client, message) {
+  sendFrame(client.socket, 0x1, Buffer.from(JSON.stringify(message)));
+}
+function broadcastToUser(userId, message) {
+  const set = clientsByUser.get(userId);
+  if (!set) return;
+  const frame = Buffer.from(JSON.stringify(message));
+  for (const client of [...set]) {
+    try { sendFrame(client.socket, 0x1, frame); } catch (_) { destroyClient(client); }
+  }
+}
+function removeTrackerForClient(client, rawTrackerId) {
+  const record = findTrackerForUser(client.userId, rawTrackerId);
+  if (!record) return false;
+  const trackerId = record.trackerId;
+  const state = trackerStates.get(trackerId);
+  if (!state || state.userId !== client.userId || state.reporterId !== client.clientId) return false;
+  trackerStates.delete(trackerId);
+  client.trackerIds.delete(trackerId);
+  broadcastTrackerRemoved(client.userId, trackerId, 'reporter_disconnected');
+  return true;
+}
+function handleMessage(client, message) {
+  if (!message || typeof message !== 'object') return;
+  if (message.type === 'hello') {
+    sendJson(client, { type: 'helloAck', clientId: client.clientId, appVersion: APP_VERSION, serverTime: now() });
+    sendJson(client, {
+      type: 'snapshot',
+      trackers: stateSnapshot(client.userId),
+      lastKnown: lastKnownSnapshot(client.userId),
+      ownedTrackers: trackersForUser(client.userId),
+      serverTime: now(),
     });
-    setAuthMode('login');
-    checkSession();
-  </script>
-</body>
-</html>
+    return;
+  }
+  if (message.type === 'trackerReport') {
+    try {
+      const state = sanitizeReport(message, client);
+      const previous = trackerStates.get(state.trackerId) || lastKnown.get(state.trackerId);
+      if (!state.trackerMode && previous && previous.trackerMode) state.trackerMode = previous.trackerMode;
+      trackerStates.set(state.trackerId, state);
+      client.trackerIds.add(state.trackerId);
+      if (state.location) {
+        lastKnown.set(state.trackerId, { ...state, live: false });
+        scheduleSave();
+      }
+      broadcastToUser(client.userId, { type: 'trackerState', state: publicState(state) });
+    } catch (error) {
+      sendJson(client, { type: 'error', message: error.message });
+    }
+    return;
+  }
+  if (message.type === 'trackerStop') {
+    const rawTrackerId = clampText(message.deviceId || message.trackerId, MAX_DEVICE_ID_LENGTH);
+    if (rawTrackerId) removeTrackerForClient(client, rawTrackerId);
+    return;
+  }
+  sendJson(client, { type: 'error', message: `Unknown message type: ${String(message.type || 'undefined')}` });
+}
+function closeClient(client, code) {
+  if (client.closing) return;
+  client.closing = true;
+  client.buffer = Buffer.alloc(0);
+  sendFrame(client.socket, 0x8, Buffer.from([code >> 8, code & 0xff]));
+  client.socket.end();
+}
+function dispatchTextFrame(client, payload) {
+  let message;
+  try { message = JSON.parse(payload.toString('utf8')); }
+  catch (_) { sendJson(client, { type: 'error', message: 'Invalid JSON message' }); return; }
+  try { handleMessage(client, message); }
+  catch (error) {
+    console.error(`Message handler failed: ${error.stack || error.message}`);
+    sendJson(client, { type: 'error', message: 'Internal error while handling the message' });
+  }
+}
+function processWebSocketBuffer(client) {
+  while (!client.closing && client.buffer.length >= 2) {
+    const first = client.buffer[0];
+    const second = client.buffer[1];
+    const fin = Boolean(first & 0x80);
+    const opcode = first & 0x0f;
+    const masked = Boolean(second & 0x80);
+    let payloadLength = second & 0x7f;
+    let offset = 2;
+    if (!masked) return closeClient(client, 1002);
+    if (opcode >= 0x8 && (!fin || payloadLength > 125)) return closeClient(client, 1002);
+    if (payloadLength === 126) {
+      if (client.buffer.length < offset + 2) return;
+      payloadLength = client.buffer.readUInt16BE(offset);
+      offset += 2;
+    } else if (payloadLength === 127) {
+      if (client.buffer.length < offset + 8) return;
+      const length64 = client.buffer.readBigUInt64BE(offset);
+      if (length64 > BigInt(MAX_MESSAGE_BYTES)) return closeClient(client, 1009);
+      payloadLength = Number(length64);
+      offset += 8;
+    }
+    if (payloadLength > MAX_MESSAGE_BYTES) return closeClient(client, 1009);
+    const frameLength = offset + 4 + payloadLength;
+    if (client.buffer.length < frameLength) return;
+    const mask = client.buffer.subarray(offset, offset + 4);
+    offset += 4;
+    const payload = Buffer.from(client.buffer.subarray(offset, offset + payloadLength));
+    client.buffer = client.buffer.subarray(frameLength);
+    client.alive = true;
+    for (let i = 0; i < payload.length; i++) payload[i] ^= mask[i & 3];
+    if (!fin && opcode < 8) return closeClient(client, 1003);
+    if (opcode === 0x1) {
+      dispatchTextFrame(client, payload);
+    } else if (opcode === 0x8) {
+      client.closing = true;
+      client.buffer = Buffer.alloc(0);
+      sendFrame(client.socket, 0x8, payload);
+      client.socket.end();
+      return;
+    } else if (opcode === 0x9) {
+      sendFrame(client.socket, 0xA, payload);
+    } else if (opcode !== 0xA) {
+      return closeClient(client, 1003);
+    }
+  }
+}
+function destroyClient(client) {
+  if (client.destroyed) return;
+  client.destroyed = true;
+  clients.delete(client);
+  const set = clientsByUser.get(client.userId);
+  if (set) { set.delete(client); if (!set.size) clientsByUser.delete(client.userId); }
+  for (const trackerId of client.trackerIds) {
+    const state = trackerStates.get(trackerId);
+    if (state && state.reporterId === client.clientId && state.userId === client.userId) {
+      trackerStates.delete(trackerId);
+      broadcastTrackerRemoved(client.userId, trackerId, 'reporter_disconnected');
+    }
+  }
+  client.trackerIds.clear();
+  try { client.socket.destroy(); } catch (_) {}
+}
+function rejectUpgrade(socket, statusLine) {
+  try { socket.write(`HTTP/1.1 ${statusLine}\r\nConnection: close\r\nCache-Control: no-store\r\n\r\n`); } catch (_) {}
+  socket.destroy();
+}
+function handleUpgrade(request, socket, head) {
+  socket.on('error', () => {});
+  let pathname;
+  try { pathname = new URL(request.url, 'http://localhost').pathname; }
+  catch (_) { return rejectUpgrade(socket, '400 Bad Request'); }
+  const expectedWsPath = (WS_PATH || '/ws').replace(/\/+$/, '') || '/ws';
+  if (request.method !== 'GET' || (pathname !== expectedWsPath && pathname !== `${expectedWsPath}/`)) {
+    return rejectUpgrade(socket, '404 Not Found');
+  }
+  const user = getSessionUser(request);
+  if (!user) return rejectUpgrade(socket, '401 Unauthorized');
+  const upgrade = String(request.headers.upgrade || '').toLowerCase();
+  const connection = String(request.headers.connection || '').toLowerCase();
+  const key = request.headers['sec-websocket-key'];
+  const version = String(request.headers['sec-websocket-version'] || '');
+  if (upgrade !== 'websocket' || !connection.includes('upgrade') || !key || version !== '13') {
+    return rejectUpgrade(socket, '400 Bad Request');
+  }
+  const accept = crypto.createHash('sha1').update(key + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest('base64');
+  socket.write('HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n' + `Sec-WebSocket-Accept: ${accept}\r\n\r\n`);
+  socket.setNoDelay(true);
+  const cookies = parseCookies(request.headers.cookie);
+  const client = {
+    socket,
+    clientId: crypto.randomUUID(),
+    sessionKey: hashSession(cookies[SESSION_COOKIE]),
+    userId: user.id,
+    buffer: Buffer.alloc(0),
+    trackerIds: new Set(),
+    destroyed: false,
+    closing: false,
+    alive: true,
+  };
+  clients.add(client);
+  if (!clientsByUser.has(user.id)) clientsByUser.set(user.id, new Set());
+  clientsByUser.get(user.id).add(client);
+  socket.on('data', chunk => {
+    if (client.destroyed || client.closing) return;
+    client.buffer = client.buffer.length ? Buffer.concat([client.buffer, chunk]) : chunk;
+    processWebSocketBuffer(client);
+  });
+  socket.on('close', () => destroyClient(client));
+  socket.on('end', () => destroyClient(client));
+  socket.on('error', () => destroyClient(client));
+  if (head && head.length) { client.buffer = Buffer.from(head); processWebSocketBuffer(client); }
+}
+function readCredentials(body) {
+  const username = typeof body.username === 'string' ? body.username.trim().toLowerCase() : '';
+  const password = typeof body.password === 'string' ? body.password : '';
+  return { username, password };
+}
+async function registerAccount(request, response) {
+  if (!REGISTRATION_ENABLED) return jsonResponse(response, 403, { error: 'Registration is currently disabled.' });
+  if (!rateLimitAuth(request, response, 'register')) return;
+  const body = await readJsonBody(request);
+  const { username, password } = readCredentials(body);
+  if (!USERNAME_RE.test(username)) {
+    return jsonResponse(response, 400, { error: 'Username must be 3–32 characters and contain only letters, numbers, dot, underscore, or hyphen.' });
+  }
+  if (password.length < PASSWORD_MIN_LENGTH || password.length > PASSWORD_MAX_LENGTH) {
+    return jsonResponse(response, 400, { error: `Password must be between ${PASSWORD_MIN_LENGTH} and ${PASSWORD_MAX_LENGTH} characters.` });
+  }
+  if (usersByName.has(username)) return jsonResponse(response, 409, { error: 'That username is already taken.' });
+  const salt = crypto.randomBytes(16);
+  const hash = await scryptAsync(password, salt, SCRYPT_KEY_LENGTH);
+  if (usersByName.has(username)) return jsonResponse(response, 409, { error: 'That username is already taken.' });
+  const isFirstUser = users.size === 0;
+  const user = {
+    id: crypto.randomUUID(),
+    username,
+    passwordSalt: salt.toString('base64url'),
+    passwordHash: Buffer.from(hash).toString('base64url'),
+    createdAt: now(),
+  };
+  users.set(user.id, user);
+  usersByName.set(username, user);
+  try {
+    saveUsers();
+  } catch (error) {
+    users.delete(user.id);
+    usersByName.delete(username);
+    throw error;
+  }
+  if (isFirstUser) migrateLegacyPositionsToFirstUser(user.id);
+  const token = createSession(user);
+  setSessionCookie(request, response, token);
+  jsonResponse(response, 201, { ok: true, user: safeUser(user) });
+}
+async function loginAccount(request, response) {
+  if (!rateLimitAuth(request, response, 'login')) return;
+  const body = await readJsonBody(request);
+  const { username, password } = readCredentials(body);
+  const user = usersByName.get(username);
+  let valid = false;
+  if (password.length <= PASSWORD_MAX_LENGTH) {
+    try {
+      const salt = user ? Buffer.from(user.passwordSalt, 'base64url') : DUMMY_SALT;
+      const candidate = Buffer.from(await scryptAsync(password, salt, SCRYPT_KEY_LENGTH));
+      if (user) {
+        const saved = Buffer.from(user.passwordHash, 'base64url');
+        valid = candidate.length === saved.length && crypto.timingSafeEqual(candidate, saved);
+      }
+    } catch (_) { valid = false; }
+  }
+  if (!valid) return jsonResponse(response, 401, { error: 'Incorrect username or password.' });
+  const token = createSession(user);
+  setSessionCookie(request, response, token);
+  jsonResponse(response, 200, { ok: true, user: safeUser(user) });
+}
+function logoutAccount(request, response) {
+  const cookies = parseCookies(request.headers.cookie);
+  const token = cookies[SESSION_COOKIE];
+  const sessionKey = token ? hashSession(token) : '';
+  if (sessionKey) sessions.delete(sessionKey);
+  if (sessionKey) {
+    for (const client of [...clients]) {
+      if (client.sessionKey === sessionKey) destroyClient(client);
+    }
+  }
+  clearSessionCookie(request, response);
+  jsonResponse(response, 200, {
+    ok: true
+  });
+}
+
+async function serveStatic(request, response, pathname) {
+  if (!STATIC_DIR || (request.method !== 'GET' && request.method !== 'HEAD')) return false;
+  let relative;
+  try { relative = decodeURIComponent(pathname); } catch (_) { return false; }
+  if (relative.includes('\0')) return false;
+  if (relative.endsWith('/')) relative += 'index.html';
+  const file = path.resolve(STATIC_DIR, `.${relative}`);
+  if (file !== STATIC_DIR && !file.startsWith(STATIC_DIR + path.sep)) return false;
+  const type = STATIC_MIME[path.extname(file).toLowerCase()];
+  if (!type) return false;
+  try {
+    const data = await fs.promises.readFile(file);
+    response.writeHead(200, { 'Content-Type': type, 'Content-Length': data.length, 'Cache-Control': 'no-cache', 'X-Content-Type-Options': 'nosniff' });
+    response.end(request.method === 'HEAD' ? undefined : data);
+    return true;
+  } catch (_) { return false; }
+}
+
+const server = http.createServer(async (request, response) => {
+  let pathname;
+  try { pathname = new URL(request.url, 'http://localhost').pathname; }
+  catch (_) { return jsonResponse(response, 400, { error: 'Bad request.' }); }
+  try {
+    if (request.method === 'GET' && pathname === '/api/health') {
+      return jsonResponse(response, 200, { ok: true, service: 'opentag-backend', version: APP_VERSION, time: now() });
+    }
+    if (request.method === 'GET' && pathname === '/api/auth/me') {
+      const user = getSessionUser(request);
+      return jsonResponse(response, 200, user ? { authenticated: true, user: safeUser(user) } : { authenticated: false });
+    }
+    if (request.method === 'POST' && pathname === '/api/auth/register') return await registerAccount(request, response);
+    if (request.method === 'POST' && pathname === '/api/auth/login') return await loginAccount(request, response);
+    if (request.method === 'POST' && pathname === '/api/auth/logout') return logoutAccount(request, response);
+
+    if (pathname.startsWith('/api/trackers')) {
+      const user = getSessionUser(request);
+      if (!user) return jsonResponse(response, 401, { error: 'Authentication required.' });
+      if (request.method === 'GET' && pathname === '/api/trackers') {
+        return jsonResponse(response, 200, { trackers: trackersForUser(user.id), serverTime: now() });
+      }
+      if (request.method === 'POST' && pathname === '/api/trackers/add') {
+        return jsonResponse(response, 201, { ok: true, tracker: registerTracker(user, await readJsonBody(request)) });
+      }
+      if (request.method === 'POST' && pathname === '/api/trackers/rebind') {
+        return jsonResponse(response, 200, { ok: true, tracker: rebindTracker(user, await readJsonBody(request)) });
+      }
+      if (request.method === 'POST' && pathname === '/api/trackers/rename') {
+        return jsonResponse(response, 200, { ok: true, tracker: renameTracker(user, await readJsonBody(request)) });
+      }
+      if (request.method === 'POST' && pathname === '/api/trackers/remove') {
+        deleteTracker(user, await readJsonBody(request));
+        return jsonResponse(response, 200, { ok: true });
+      }
+      return jsonResponse(response, 404, { error: 'Not found' });
+    }
+
+    if (request.method === 'GET' && pathname === '/api/state') {
+      const user = getSessionUser(request);
+      if (!user) return jsonResponse(response, 401, { error: 'Authentication required.' });
+      const body = {
+        trackers: stateSnapshot(user.id),
+        lastKnown: lastKnownSnapshot(user.id),
+        ownedTrackers: trackersForUser(user.id),
+        serverTime: now(),
+      };
+      return jsonResponse(response, 200, body, { 'Cache-Control': 'no-store, no-cache, must-revalidate', Pragma: 'no-cache', Expires: '0' });
+    }
+    if (!pathname.startsWith('/api/') && await serveStatic(request, response, pathname)) return;
+    return jsonResponse(response, 404, { error: 'Not found' });
+  } catch (error) {
+    const statusCode = Number.isInteger(error.statusCode) ? error.statusCode : 500;
+    if (statusCode >= 500) console.error(`Request failed (${request.method} ${pathname}): ${error.message}`);
+    if (response.headersSent) return response.destroy();
+    return jsonResponse(response, statusCode, { error: statusCode >= 500 ? 'Internal server error.' : error.message });
+  }
+});
+server.on('upgrade', handleUpgrade);
+
+setInterval(removeStaleTrackers, 5000).unref();
+
+setInterval(() => {
+  const t = now();
+  for (const [key, session] of sessions) if (session.expiresAt <= t) sessions.delete(key);
+  for (const [key, timestamps] of authRateLimits) {
+    const recent = timestamps.filter(time => time > t - RATE_WINDOW_MS);
+    if (recent.length) authRateLimits.set(key, recent); else authRateLimits.delete(key);
+  }
+  for (const client of [...clients]) {
+    if (!sessions.has(client.sessionKey) || !client.alive) { destroyClient(client); continue; }
+    client.alive = false;
+    try { sendFrame(client.socket, 0x9); } catch (_) { destroyClient(client); }
+  }
+}, PING_INTERVAL_MS).unref();
+
+let shuttingDown = false;
+function shutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`${signal} received, saving data and shutting down.`);
+  flushLastKnownSync();
+  for (const client of [...clients]) { try { closeClient(client, 1001); } catch (_) {} }
+  server.close(() => process.exit(0));
+  setTimeout(() => process.exit(0), 2000).unref();
+}
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
+process.on('unhandledRejection', (reason) => console.error('Unhandled rejection:', reason));
+
+loadUsers();
+loadTrackers();
+loadLastKnown();
+ensureLegacyTrackerRecords();
+
+server.listen(PORT, HOST, () => {
+  console.log(`OpenTag v${APP_VERSION} multi-tracker backend listening on http://${HOST}:${PORT}`);
+  console.log(`WebSocket endpoint: ${WS_PATH}`);
+  console.log(`Tracker state TTL: ${TRACKER_TTL_MS} ms`);
+  console.log(`Account registration: ${REGISTRATION_ENABLED ? 'enabled' : 'disabled'}`);
+  console.log(`Minimum password length: ${PASSWORD_MIN_LENGTH}`);
+  if (STATIC_DIR) console.log(`Serving web app from ${STATIC_DIR}`);
+  console.log(`Authentication database: ${AUTH_FILE || 'none (memory only)'}`);
+  console.log(`Last known positions file: ${DATA_FILE || 'none (memory only)'}`);
+  console.log(`Tracker registry file: ${TRACKERS_FILE || 'none (memory only)'}`);
+});
