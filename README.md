@@ -14,6 +14,7 @@ Same goes for browsers. Chromium browsers will 100% work, but I don't know what 
 
 # LocalHost option 
 (Depreciated. Use only for local testing)\
+
  9. Open a CMD inside the unzipped folder and run: python -m http.server 8000
  10. Go back to Chrome and open: http://localhost:8000/
  11. If you did everything correctly it should show you a map and some set up buttons
