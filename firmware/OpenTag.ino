@@ -5,6 +5,7 @@
 BLEService controlService("19b10000-e8f2-537e-4f6c-d104768a1214");
 BLECharacteristic modeCharacteristic("19b10001-e8f2-537e-4f6c-d104768a1214");
 BLECharacteristic trackerIdCharacteristic("19b10002-e8f2-537e-4f6c-d104768a1214");
+BLECharacteristic heartbeatCharacteristic("19b10003-e8f2-537e-4f6c-d104768a1214");
 
 volatile bool restartAdvertisingPending = false;
 volatile bool lostMode = false;
@@ -18,6 +19,7 @@ const int8_t   LOST_TX_POWER    = 8;
 const uint32_t NORMAL_LED_PERIOD_MS = 2000;
 const uint32_t LOST_LED_PERIOD_MS   = 300;
 const uint32_t LED_PULSE_MS         = 30;
+const uint32_t HEARTBEAT_INTERVAL_MS = 2000;
 
 void buildAdvertisingData()
 {
@@ -123,6 +125,13 @@ void setup()
   modeCharacteristic.begin();
   modeCharacteristic.write8(0);
 
+  heartbeatCharacteristic.setProperties(CHR_PROPS_READ | CHR_PROPS_NOTIFY);
+  heartbeatCharacteristic.setPermission(SECMODE_OPEN, SECMODE_NO_ACCESS);
+  heartbeatCharacteristic.setFixedLen(5);
+  heartbeatCharacteristic.begin();
+  uint8_t initialHeartbeat[5] = { 1, 0, NORMAL_TX_POWER, 0, 0 };
+  heartbeatCharacteristic.write(initialHeartbeat, sizeof(initialHeartbeat));
+
   Bluefruit.Advertising.restartOnDisconnect(false);
 
   startAdvertisingMode(false);
@@ -132,11 +141,30 @@ void loop()
 {
   static uint32_t lastPulse = 0;
   static bool ledOn = false;
+  static uint32_t lastHeartbeat = 0;
+  static uint16_t heartbeatSequence = 0;
   const uint32_t now = millis();
 
   if (restartAdvertisingPending && !Bluefruit.Periph.connected()) {
     restartAdvertisingPending = false;
     startAdvertisingMode(lostMode);
+  }
+
+  if (Bluefruit.Periph.connected() && now - lastHeartbeat >= HEARTBEAT_INTERVAL_MS) {
+    lastHeartbeat = now;
+    const int8_t txPower = lostMode ? LOST_TX_POWER : NORMAL_TX_POWER;
+    uint8_t heartbeat[5] = {
+      1,
+      static_cast<uint8_t>(lostMode ? 1 : 0),
+      static_cast<uint8_t>(txPower),
+      static_cast<uint8_t>(heartbeatSequence & 0xFF),
+      static_cast<uint8_t>((heartbeatSequence >> 8) & 0xFF)
+    };
+    heartbeatSequence++;
+    heartbeatCharacteristic.write(heartbeat, sizeof(heartbeat));
+    if (heartbeatCharacteristic.notifyEnabled()) {
+      heartbeatCharacteristic.notify(heartbeat, sizeof(heartbeat));
+    }
   }
 
   const uint32_t period = lostMode ? LOST_LED_PERIOD_MS : NORMAL_LED_PERIOD_MS;
