@@ -13,10 +13,13 @@ const TRACKER_TTL_MS = Number(process.env.TRACKER_TTL_MS || 15000);
 const MAX_MESSAGE_BYTES = 32 * 1024;
 const MAX_BODY_BYTES = 8 * 1024;
 const MAX_TRACKERS_PER_USER = 100;
+const MAX_DEVICES_PER_USER = 30;
 const PING_INTERVAL_MS = Number(process.env.PING_INTERVAL_MS || 25000);
 const DATA_FILE = process.env.DATA_FILE || '';
 const AUTH_FILE = process.env.AUTH_FILE || (DATA_FILE ? path.join(path.dirname(DATA_FILE), 'auth.json') : '');
 const TRACKERS_FILE = process.env.TRACKERS_FILE || (DATA_FILE ? path.join(path.dirname(DATA_FILE), 'trackers.json') : '');
+const DEVICES_FILE = process.env.DEVICES_FILE || (DATA_FILE ? path.join(path.dirname(DATA_FILE), 'devices.json') : '');
+const DEVICE_TTL_MS = Number(process.env.DEVICE_TTL_MS || 45000);
 const REGISTRATION_ENABLED = String(process.env.REGISTRATION_ENABLED || 'true').toLowerCase() !== 'false';
 const SESSION_COOKIE = 'opentag_session';
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -41,6 +44,8 @@ const sessions = new Map();
 const trackerStates = new Map();
 const lastKnown = new Map();
 const ownedTrackers = new Map();
+const ownedDevices = new Map();
+const liveDevices = new Map();
 const clients = new Set();
 const clientsByUser = new Map();
 const authRateLimits = new Map();
@@ -318,6 +323,214 @@ function loadTrackers() {
     console.log(`Loaded ${ownedTrackers.size} registered tracker(s) from ${TRACKERS_FILE}`);
   } catch (error) {
     if (error.code !== 'ENOENT') console.error(`Could not load tracker registry: ${error.message}`);
+  }
+}
+function normalizeDeviceName(value) {
+  return clampText(value, 48).normalize('NFKC').replace(/\s+/g, ' ').trim().toLowerCase();
+}
+function scopedDeviceKey(userId, deviceId) {
+  const normalized = normalizeDeviceName(deviceId);
+  return normalized ? `${userId}:device:${normalized}` : '';
+}
+function saveDevices() {
+  if (!DEVICES_FILE) return;
+  const tmp = `${DEVICES_FILE}.tmp`;
+  try {
+    fs.mkdirSync(path.dirname(DEVICES_FILE), { recursive: true });
+    fs.writeFileSync(tmp, JSON.stringify({ version: 1, devices: [...ownedDevices.values()] }), { mode: 0o600 });
+    fs.renameSync(tmp, DEVICES_FILE);
+  } catch (error) {
+    console.error(`Could not save device registry ${DEVICES_FILE}: ${error.message}`);
+    throw new Error('Could not save device registry. Check that the persistent data directory is writable.');
+  }
+}
+function loadDevices() {
+  if (!DEVICES_FILE) {
+    console.warn('DEVICES_FILE is not configured; device registry will be memory-only.');
+    return;
+  }
+  try {
+    const parsed = JSON.parse(fs.readFileSync(DEVICES_FILE, 'utf8'));
+    for (const item of Array.isArray(parsed.devices) ? parsed.devices : []) {
+      if (!item || typeof item.userId !== 'string' || typeof item.name !== 'string') continue;
+      const deviceId = normalizeDeviceName(item.deviceId || item.name);
+      if (!deviceId) continue;
+      const key = scopedDeviceKey(item.userId, deviceId);
+      const location = sanitizeLocation(item.lastLocation);
+      ownedDevices.set(key, {
+        deviceId,
+        userId: item.userId,
+        name: clampText(item.name, 48) || item.name,
+        type: ['phone', 'tablet', 'laptop', 'computer', 'other'].includes(item.type) ? item.type : 'other',
+        createdAt: Number(item.createdAt) || now(),
+        updatedAt: Number(item.updatedAt) || Number(item.lastSeenAt) || now(),
+        lastSeenAt: Number(item.lastSeenAt) || null,
+        lastLocation: location,
+      });
+    }
+    console.log(`Loaded ${ownedDevices.size} registered device(s) from ${DEVICES_FILE}`);
+  } catch (error) {
+    if (error.code !== 'ENOENT') console.error(`Could not load device registry: ${error.message}`);
+  }
+}
+function publicDevice(record) {
+  const key = scopedDeviceKey(record.userId, record.deviceId);
+  const live = liveDevices.get(key);
+  const online = Boolean(live && now() - live.updatedAt <= DEVICE_TTL_MS);
+  const { userId, lastLocation, ...safe } = record;
+  return {
+    ...safe,
+    location: live?.location || lastLocation || null,
+    online,
+    updatedAt: online ? live.updatedAt : (record.lastSeenAt || record.updatedAt),
+    lastSeenAt: record.lastSeenAt || null,
+  };
+}
+function devicesForUser(userId) {
+  return [...ownedDevices.values()]
+    .filter(item => item.userId === userId)
+    .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0))
+    .map(publicDevice);
+}
+function registerDevice(user, body) {
+  const name = clampText(body.name, 48).replace(/\s+/g, ' ');
+  const deviceId = normalizeDeviceName(name);
+  const type = ['phone', 'tablet', 'laptop', 'computer', 'other'].includes(body.type) ? body.type : 'other';
+  if (name.length < 2 || !deviceId) throw httpError(400, 'Device name must contain at least 2 characters.');
+  const key = scopedDeviceKey(user.id, deviceId);
+  const existing = ownedDevices.get(key);
+  if (existing) return publicDevice(existing);
+  const count = [...ownedDevices.values()].filter(item => item.userId === user.id).length;
+  if (count >= MAX_DEVICES_PER_USER) throw httpError(409, `This account can register up to ${MAX_DEVICES_PER_USER} devices.`);
+  const record = {
+    deviceId,
+    userId: user.id,
+    name,
+    type,
+    createdAt: now(),
+    updatedAt: now(),
+    lastSeenAt: null,
+    lastLocation: null,
+  };
+  ownedDevices.set(key, record);
+  try { saveDevices(); }
+  catch (error) { ownedDevices.delete(key); throw error; }
+  broadcastToUser(user.id, { type: 'deviceAdded', device: publicDevice(record) });
+  return publicDevice(record);
+}
+function renameDevice(user, body) {
+  const previousDeviceId = normalizeDeviceName(body.deviceId);
+  const name = clampText(body.name, 48).replace(/\s+/g, ' ');
+  const deviceId = normalizeDeviceName(name);
+  const previousKey = scopedDeviceKey(user.id, previousDeviceId);
+  const nextKey = scopedDeviceKey(user.id, deviceId);
+  const record = ownedDevices.get(previousKey);
+  if (!record || record.userId !== user.id) throw httpError(404, 'Device not found in this account.');
+  if (name.length < 2 || !deviceId) throw httpError(400, 'Device name must contain at least 2 characters.');
+  if (nextKey !== previousKey && ownedDevices.has(nextKey)) {
+    throw httpError(409, 'Another device in this account already uses that name. Choose a different name.');
+  }
+  const previousName = record.name;
+  const previousUpdatedAt = record.updatedAt;
+  const live = liveDevices.get(previousKey);
+  ownedDevices.delete(previousKey);
+  record.deviceId = deviceId;
+  record.name = name;
+  record.updatedAt = now();
+  ownedDevices.set(nextKey, record);
+  if (live) {
+    live.deviceId = deviceId;
+    liveDevices.delete(previousKey);
+    liveDevices.set(nextKey, live);
+  }
+  for (const client of clientsByUser.get(user.id) || []) {
+    if (client.deviceKey === previousKey) client.deviceKey = nextKey;
+  }
+  try { saveDevices(); }
+  catch (error) {
+    ownedDevices.delete(nextKey);
+    record.deviceId = previousDeviceId;
+    record.name = previousName;
+    record.updatedAt = previousUpdatedAt;
+    ownedDevices.set(previousKey, record);
+    if (live) {
+      live.deviceId = previousDeviceId;
+      liveDevices.delete(nextKey);
+      liveDevices.set(previousKey, live);
+    }
+    for (const client of clientsByUser.get(user.id) || []) {
+      if (client.deviceKey === nextKey) client.deviceKey = previousKey;
+    }
+    throw error;
+  }
+  broadcastToUser(user.id, { type: 'deviceRenamed', previousDeviceId, device: publicDevice(record) });
+  return publicDevice(record);
+}
+function deleteDevice(user, body) {
+  const deviceId = normalizeDeviceName(body.deviceId);
+  const key = scopedDeviceKey(user.id, deviceId);
+  const record = ownedDevices.get(key);
+  if (!record || record.userId !== user.id) throw httpError(404, 'Device not found in this account.');
+  ownedDevices.delete(key);
+  liveDevices.delete(key);
+  for (const client of clientsByUser.get(user.id) || []) if (client.deviceKey === key) client.deviceKey = null;
+  try { saveDevices(); }
+  catch (error) { ownedDevices.set(key, record); throw error; }
+  broadcastToUser(user.id, { type: 'deviceDeleted', deviceId });
+  return true;
+}
+function reportDeviceLocation(client, message) {
+  const deviceId = normalizeDeviceName(message.deviceId || message.name);
+  const key = scopedDeviceKey(client.userId, deviceId);
+  const record = ownedDevices.get(key);
+  if (!record) throw new Error('This device is not registered to your account. Add this device from the menu first.');
+  const existingLive = liveDevices.get(key);
+  if (existingLive && existingLive.reporterId !== client.clientId && now() - existingLive.updatedAt <= DEVICE_TTL_MS) {
+    throw new Error('This device name is already active in another browser. Use a unique name for each device.');
+  }
+  if (client.deviceKey && client.deviceKey !== key) {
+    const previous = liveDevices.get(client.deviceKey);
+    if (previous && previous.reporterId === client.clientId) {
+      liveDevices.delete(client.deviceKey);
+      const previousRecord = ownedDevices.get(client.deviceKey);
+      if (previousRecord) broadcastToUser(client.userId, { type: 'deviceState', device: publicDevice(previousRecord) });
+    }
+  }
+  const location = sanitizeLocation(message.location);
+  const timestamp = now();
+  if (location) record.lastLocation = location;
+  record.lastSeenAt = timestamp;
+  record.updatedAt = timestamp;
+  const state = {
+    userId: client.userId,
+    reporterId: client.clientId,
+    deviceId,
+    updatedAt: timestamp,
+    location: location || record.lastLocation || null,
+  };
+  liveDevices.set(key, state);
+  client.deviceKey = key;
+  saveDevices();
+  broadcastToUser(client.userId, { type: 'deviceState', device: publicDevice(record) });
+}
+function stopDeviceReporting(client, deviceId = '') {
+  const key = deviceId ? scopedDeviceKey(client.userId, deviceId) : client.deviceKey;
+  if (!key) return;
+  const live = liveDevices.get(key);
+  if (live && live.reporterId === client.clientId) {
+    liveDevices.delete(key);
+    const record = ownedDevices.get(key);
+    if (record) broadcastToUser(client.userId, { type: 'deviceState', device: publicDevice(record) });
+  }
+  if (client.deviceKey === key) client.deviceKey = null;
+}
+function removeStaleDevices() {
+  const cutoff = now() - DEVICE_TTL_MS;
+  for (const [key, state] of liveDevices) {
+    if (state.updatedAt >= cutoff) continue;
+    liveDevices.delete(key);
+    const record = ownedDevices.get(key);
+    if (record) broadcastToUser(record.userId, { type: 'deviceState', device: publicDevice(record) });
   }
 }
 function publicTracker(record) {
@@ -706,8 +919,18 @@ function handleMessage(client, message) {
       trackers: stateSnapshot(client.userId),
       lastKnown: lastKnownSnapshot(client.userId),
       ownedTrackers: trackersForUser(client.userId),
+      devices: devicesForUser(client.userId),
       serverTime: now(),
     });
+    return;
+  }
+  if (message.type === 'deviceReport') {
+    try { reportDeviceLocation(client, message); }
+    catch (error) { sendJson(client, { type: 'error', message: error.message }); }
+    return;
+  }
+  if (message.type === 'deviceStop') {
+    stopDeviceReporting(client, message.deviceId || '');
     return;
   }
   if (message.type === 'trackerReport') {
@@ -812,6 +1035,7 @@ function destroyClient(client) {
     }
   }
   client.trackerIds.clear();
+  stopDeviceReporting(client);
   try { client.socket.destroy(); } catch (_) {}
 }
 function rejectUpgrade(socket, statusLine) {
@@ -847,6 +1071,7 @@ function handleUpgrade(request, socket, head) {
     userId: user.id,
     buffer: Buffer.alloc(0),
     trackerIds: new Set(),
+    deviceKey: null,
     destroyed: false,
     closing: false,
     alive: true,
@@ -977,6 +1202,25 @@ const server = http.createServer(async (request, response) => {
     if (request.method === 'POST' && pathname === '/api/auth/login') return await loginAccount(request, response);
     if (request.method === 'POST' && pathname === '/api/auth/logout') return logoutAccount(request, response);
 
+    if (pathname.startsWith('/api/devices')) {
+      const user = getSessionUser(request);
+      if (!user) return jsonResponse(response, 401, { error: 'Authentication required.' });
+      if (request.method === 'GET' && pathname === '/api/devices') {
+        return jsonResponse(response, 200, { devices: devicesForUser(user.id), serverTime: now() });
+      }
+      if (request.method === 'POST' && pathname === '/api/devices/register') {
+        return jsonResponse(response, 201, { ok: true, device: registerDevice(user, await readJsonBody(request)) });
+      }
+      if (request.method === 'POST' && pathname === '/api/devices/rename') {
+        return jsonResponse(response, 200, { ok: true, device: renameDevice(user, await readJsonBody(request)) });
+      }
+      if (request.method === 'POST' && pathname === '/api/devices/remove') {
+        deleteDevice(user, await readJsonBody(request));
+        return jsonResponse(response, 200, { ok: true });
+      }
+      return jsonResponse(response, 404, { error: 'Not found' });
+    }
+
     if (pathname.startsWith('/api/trackers')) {
       const user = getSessionUser(request);
       if (!user) return jsonResponse(response, 401, { error: 'Authentication required.' });
@@ -1006,6 +1250,7 @@ const server = http.createServer(async (request, response) => {
         trackers: stateSnapshot(user.id),
         lastKnown: lastKnownSnapshot(user.id),
         ownedTrackers: trackersForUser(user.id),
+        devices: devicesForUser(user.id),
         serverTime: now(),
       };
       return jsonResponse(response, 200, body, { 'Cache-Control': 'no-store, no-cache, must-revalidate', Pragma: 'no-cache', Expires: '0' });
@@ -1022,6 +1267,7 @@ const server = http.createServer(async (request, response) => {
 server.on('upgrade', handleUpgrade);
 
 setInterval(removeStaleTrackers, 5000).unref();
+setInterval(removeStaleDevices, 5000).unref();
 
 setInterval(() => {
   const t = now();
@@ -1053,6 +1299,7 @@ process.on('unhandledRejection', (reason) => console.error('Unhandled rejection:
 
 loadUsers();
 loadTrackers();
+loadDevices();
 loadLastKnown();
 ensureLegacyTrackerRecords();
 
