@@ -296,6 +296,40 @@
             line-height: 1.4
         }
 
+        .device-last-report {
+            display: flex;
+            flex-direction: column;
+            gap: 1px;
+            margin-top: 6px;
+            line-height: 1.2
+        }
+
+        .device-last-report-label {
+            font-size: 9px;
+            font-weight: 750;
+            letter-spacing: .045em;
+            text-transform: uppercase;
+            color: var(--muted)
+        }
+
+        .device-last-report-date {
+            font-size: 10px;
+            font-weight: 600;
+            color: var(--muted)
+        }
+
+        .device-last-report-time {
+            font-size: 12px;
+            font-weight: 750;
+            color: var(--text)
+        }
+
+        .device-last-report-empty {
+            font-size: 11px;
+            font-weight: 500;
+            color: var(--muted)
+        }
+
         .tracker-status-dot {
             width: 10px;
             height: 10px;
@@ -450,6 +484,24 @@
             font-weight: 750;
             overflow-wrap: anywhere
         }
+
+        .metric-value-stacked {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+            line-height: 1.15
+        }
+
+            .metric-value-stacked .metric-date {
+                font-size: 12px;
+                font-weight: 600;
+                color: var(--muted)
+            }
+
+            .metric-value-stacked .metric-time {
+                font-size: 16px;
+                font-weight: 750
+            }
 
         .legend {
             display: flex;
@@ -921,6 +973,32 @@
               if (h < 24) return `${h} h ago`;
               return `${Math.floor(h / 24)} d ago`;
             }
+            function setDateTimeValue(elementId, timestamp) {
+              const element = $(elementId);
+              const value = Number(timestamp);
+              const date = new Date(value - serverOffsetMs);
+              if (!Number.isFinite(value) || value <= 0 || !Number.isFinite(date.getTime())) {
+                element.classList.remove('metric-value-stacked');
+                element.textContent = '–';
+                return;
+              }
+              const dateLine = document.createElement('span');
+              dateLine.className = 'metric-date';
+              dateLine.textContent = date.toLocaleDateString();
+              const timeLine = document.createElement('span');
+              timeLine.className = 'metric-time';
+              timeLine.textContent = date.toLocaleTimeString();
+              element.classList.add('metric-value-stacked');
+              element.replaceChildren(dateLine, timeLine);
+            }
+            function formatDeviceLastReportHtml(timestamp) {
+              const value = Number(timestamp);
+              const date = new Date(value - serverOffsetMs);
+              if (!Number.isFinite(value) || value <= 0 || !Number.isFinite(date.getTime())) {
+                return '<span class="device-last-report"><span class="device-last-report-label">Last Report</span><span class="device-last-report-empty">Never reported</span></span>';
+              }
+              return `<span class="device-last-report"><span class="device-last-report-label">Last Report</span><span class="device-last-report-date">${escapeHtml(date.toLocaleDateString())}</span><span class="device-last-report-time">${escapeHtml(date.toLocaleTimeString())}</span></span>`;
+            }
             function getState(trackerId) { return sharedStates.get(trackerId) || null; }
             function isOnline(state) {
               return Boolean(state && state.live !== false && serverNow() - Number(state.updatedAt || 0) <= TRACKER_TTL_MS);
@@ -1153,7 +1231,7 @@
                 $('gpsDistance').textContent = Number.isFinite(distance) ? formatDistance(distance) : '–';
                 $('distance').textContent = '–';
                 $('txPower').textContent = '–';
-                $('lastSeen').textContent = Number(device.lastSeenAt || device.updatedAt) > 0 ? new Date(Number(device.lastSeenAt || device.updatedAt) - serverOffsetMs).toLocaleTimeString() : '–';
+                setDateTimeValue('lastSeen', device.lastSeenAt || device.updatedAt);
                 $('accuracy').textContent = Number.isFinite(accuracy) ? `${Math.round(accuracy)} m` : '–';
                 $('trackerPill').textContent = online ? '🔵 Device: online' : '⚪ Device: offline';
                 $('modeControl').hidden = true;
@@ -1163,6 +1241,7 @@
               $('selectedTrackerTitle').textContent = 'Tracker data';
               $('gpsDistanceLabel').textContent = 'GPS Distance';
               $('lastSeenLabel').textContent = 'Last BLE Packet';
+              $('lastSeen').classList.remove('metric-value-stacked');
               $('accuracyLabel').textContent = 'Reporter GPS Accuracy';
               $('estimatedDistanceMetric').hidden = false;
               $('txPowerMetric').hidden = false;
@@ -1245,10 +1324,12 @@
                   const accuracy = Number(location?.accuracy);
                   const subtitle = online
                     ? `Online · GPS accuracy: ${Number.isFinite(accuracy) ? `${Math.round(accuracy)} m` : 'Unavailable'}`
-                    : `Offline · Last seen: ${state.lastSeenAt ? formatAge(serverNow() - Number(state.lastSeenAt)) : 'Never reported'}`;
+                    : 'Offline';
+                  const reportAt = Number(state.lastSeenAt || record.lastSeenAt || 0);
+                  const lastReport = formatDeviceLastReportHtml(reportAt);
                   const id = escapeHtml(record.deviceId);
                   return `<div class="tracker-row ${selected ? 'selected' : ''}">
-                    <button type="button" class="tracker-select" data-select-device="${id}"><span class="device-status-dot ${online ? 'online' : ''}"></span><span class="tracker-row-main"><span class="tracker-name">${escapeHtml(record.name)}</span><span class="tracker-sub">${escapeHtml(deviceTypeLabel(record.type))} · ${escapeHtml(subtitle)}</span></span></button>
+                    <button type="button" class="tracker-select" data-select-device="${id}"><span class="device-status-dot ${online ? 'online' : ''}"></span><span class="tracker-row-main"><span class="tracker-name">${escapeHtml(record.name)}</span><span class="tracker-sub">${escapeHtml(deviceTypeLabel(record.type))} · ${escapeHtml(subtitle)}</span>${lastReport}</span></button>
                     <div class="tracker-row-actions"><button type="button" class="ghost" title="Rename device" data-rename-device="${id}">✎</button><button type="button" class="ghost" title="Remove device" data-remove-device="${id}">×</button></div>
                   </div>`;
                 }).join(''));
@@ -1418,15 +1499,17 @@
                 const details = [deviceTypeLabel(record.type), record.platform, seen].filter(Boolean).join(' · ');
                 return `<label class="picker-option"><input type="radio" name="pickerChoice" value="${escapeHtml(record.deviceId)}"><span class="picker-option-main">${escapeHtml(record.name)}<small>${escapeHtml(details)}</small></span>${suggested.has(record.deviceId) ? '<span class="picker-badge">Probably this one</span>' : ''}</label>`;
               }).join('') + `<label class="picker-option"><input type="radio" name="pickerChoice" value=""><span class="picker-option-main">A new device<small>This phone or computer is not in the list yet</small></span></label>`;
-              const initial = devices.find(record => suggested.has(record.deviceId))?.deviceId || '';
-              for (const input of list.querySelectorAll('input')) input.checked = input.value === initial;
+              for (const input of list.querySelectorAll('input')) input.checked = false;
               $('pickerName').value = uniqueDeviceName(suggestedDeviceName());
               $('pickerError').textContent = '';
               syncPicker();
               picker.hidden = false;
               return new Promise(resolve => { pickerDone = resolve; });
             }
-            function pickerChoice() { return $('pickerList').querySelector('input:checked')?.value ?? ''; }
+            function pickerChoice() {
+              const selected = $('pickerList').querySelector('input:checked');
+              return selected ? selected.value : (ownedDevices.length ? null : '');
+            }
             function syncPicker() {
               const choice = pickerChoice();
               for (const option of $('pickerList').querySelectorAll('.picker-option')) option.classList.toggle('checked', option.querySelector('input').checked);
@@ -1440,7 +1523,8 @@
             }
             function confirmPicker() {
               const choice = pickerChoice();
-              if (choice) return closePicker({ kind: 'link', deviceId: choice });
+              if (choice === null) { $('pickerError').textContent = 'Choose an existing device or select “A new device”.'; return; }
+              if (choice !== '') return closePicker({ kind: 'link', deviceId: choice });
               const name = $('pickerName').value.trim().replace(/\s+/g, ' ');
               if (name.length < 2) { $('pickerError').textContent = 'Enter a name with at least 2 characters.'; return; }
               const same = ownedDevices.find(item => normalizeDeviceName(item.name) === normalizeDeviceName(name));
@@ -1448,7 +1532,13 @@
               closePicker({ kind: 'new', name });
             }
             async function addCurrentDeviceInner() {
-              if (deviceRestorePending) await refreshSharedState();
+              if (deviceRestorePending) {
+                await refreshSharedState();
+                if (deviceRestorePending) {
+                  log('The device list is not available yet. Check the backend connection and try again.');
+                  return;
+                }
+              }
               restoreRegisteredDevice();
               if (currentDevice) { log(`This browser already shares its location as ${currentDevice.name}.`); selectDevice(currentDevice.deviceId, false); return; }
               let suggestedIds = [];
@@ -1744,7 +1834,7 @@
                   reconnectEverOpened = true;
                   setBackendState('connected', true);
                   log('Shared backend connected.');
-                  ws.send(JSON.stringify({ type: 'hello', appVersion: 'v2.2.0' }));
+                  ws.send(JSON.stringify({ type: 'hello', appVersion: 'v2.1.4.1' }));
                 });
                 ws.addEventListener('message', event => {
                   if (sharedSocket !== ws) return;

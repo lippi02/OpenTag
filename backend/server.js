@@ -20,6 +20,7 @@ const AUTH_FILE = process.env.AUTH_FILE || (DATA_FILE ? path.join(path.dirname(D
 const TRACKERS_FILE = process.env.TRACKERS_FILE || (DATA_FILE ? path.join(path.dirname(DATA_FILE), 'trackers.json') : '');
 const DEVICES_FILE = process.env.DEVICES_FILE || (DATA_FILE ? path.join(path.dirname(DATA_FILE), 'devices.json') : '');
 const DEVICE_TTL_MS = Number(process.env.DEVICE_TTL_MS || 90000);
+const DEVICE_SUGGESTION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const REGISTRATION_ENABLED = String(process.env.REGISTRATION_ENABLED || 'true').toLowerCase() !== 'false';
 const SESSION_COOKIE = 'opentag_session';
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -50,6 +51,8 @@ const clients = new Set();
 const clientsByUser = new Map();
 const authRateLimits = new Map();
 let saveTimer = null;
+let trackerSaveTimer = null;
+let trackersDirty = false;
 let saving = false;
 let dirty = false;
 const DUMMY_SALT = crypto.randomBytes(16);
@@ -244,6 +247,7 @@ function flushLastKnownSync() {
 function saveLastKnownNow() {
     dirty = true;
     flushLastKnownSync();
+    scheduleTrackerSave();
 }
 function saveUsers() {
     if (!AUTH_FILE) {
@@ -286,23 +290,58 @@ function loadUsers() {
         if (error.code !== 'ENOENT') console.error(`Could not load account database: ${error.message}`);
     }
 }
+function syncTrackerPositionFields() {
+    for (const [trackerId, state] of lastKnown) {
+        const record = ownedTrackers.get(trackerId);
+        if (!record || !state.location) continue;
+        record.lastLocation = sanitizeLocation(state.location);
+        record.lastSeenAt = Number(state.updatedAt) || Number(record.lastSeenAt) || null;
+    }
+}
+function scheduleTrackerSave() {
+    if (!TRACKERS_FILE) return;
+    syncTrackerPositionFields();
+    trackersDirty = true;
+    if (trackerSaveTimer) return;
+    trackerSaveTimer = setTimeout(() => {
+        trackerSaveTimer = null;
+        if (!trackersDirty) return;
+        try { saveTrackers(); }
+        catch (_) { scheduleTrackerSave(); }
+    }, 5000);
+    trackerSaveTimer.unref();
+}
+function flushTrackersSync() {
+    if (!TRACKERS_FILE || !trackersDirty) return;
+    try { saveTrackers(); } catch (_) { }
+}
 function saveTrackers() {
     if (!TRACKERS_FILE) {
         console.warn('TRACKERS_FILE is not configured; tracker registry will be memory-only.');
         return;
     }
+    syncTrackerPositionFields();
     const tmp = `${TRACKERS_FILE}.tmp`;
     try {
         fs.mkdirSync(path.dirname(TRACKERS_FILE), {
             recursive: true
         });
         fs.writeFileSync(tmp, JSON.stringify({
-            version: 2,
-            trackers: [...ownedTrackers.values()]
+            version: 3,
+            trackers: [...ownedTrackers.values()].map(record => ({
+                ...record,
+                lastLocation: sanitizeLocation(record.lastLocation),
+                lastSeenAt: Number(record.lastSeenAt) || null,
+            }))
         }), {
             mode: 0o600
         });
         fs.renameSync(tmp, TRACKERS_FILE);
+        trackersDirty = false;
+        if (trackerSaveTimer) {
+            clearTimeout(trackerSaveTimer);
+            trackerSaveTimer = null;
+        }
     } catch (error) {
         console.error(`Could not save tracker registry ${TRACKERS_FILE}: ${error.message}`);
         throw new Error('Could not save tracker registry. Check that the persistent data directory is writable.');
@@ -318,7 +357,23 @@ function loadTrackers() {
         for (const item of Array.isArray(parsed.trackers) ? parsed.trackers : []) {
             if (!item || typeof item.trackerId !== 'string' || typeof item.userId !== 'string' ||
                 typeof item.deviceId !== 'string' || typeof item.name !== 'string') continue;
-            ownedTrackers.set(item.trackerId, item);
+            const record = {
+                ...item,
+                lastLocation: sanitizeLocation(item.lastLocation),
+                lastSeenAt: Number(item.lastSeenAt) || null,
+            };
+            ownedTrackers.set(item.trackerId, record);
+            if (record.lastLocation) {
+                lastKnown.set(item.trackerId, {
+                    trackerId: item.trackerId,
+                    deviceId: item.deviceId,
+                    trackerName: item.name,
+                    userId: item.userId,
+                    location: record.lastLocation,
+                    updatedAt: record.lastSeenAt || Number(record.updatedAt) || Number(record.createdAt) || now(),
+                    live: false,
+                });
+            }
         }
         console.log(`Loaded ${ownedTrackers.size} registered tracker(s) from ${TRACKERS_FILE}`);
     } catch (error) {
@@ -450,8 +505,9 @@ function suggestDevices(user, request) {
     const ip = getClientIp(request), platform = platformFromUserAgent(request.headers['user-agent']);
     const devices = userDeviceRecords(user.id).map(record => {
         const seen = deviceSeenFrom.get(scopedDeviceKey(user.id, record.deviceId));
+        const recent = Boolean(seen && now() - seen.at <= DEVICE_SUGGESTION_TTL_MS);
         const samePlatform = Boolean(platform) && (seen?.platform || record.platform) === platform;
-        return { record, at: seen?.at || 0, likely: samePlatform && seen?.ip === ip };
+        return { record, at: seen?.at || 0, likely: recent && samePlatform && seen.ip === ip };
     }).filter(item => item.likely);
     devices.sort((a, b) => b.at - a.at);
     return { platform, deviceIds: devices.map(item => item.record.deviceId) };
@@ -509,9 +565,19 @@ function dropDeviceReporter(key, clientId) {
     const live = liveDevices.get(key);
     if (!live || !live.reporters.delete(clientId)) return false;
     const cutoff = now() - DEVICE_TTL_MS;
-    for (const [id, at] of live.reporters) if (at < cutoff) live.reporters.delete(id);
-    if (live.reporters.size) return false;
-    liveDevices.delete(key);
+    for (const [id, reporter] of live.reporters) {
+        if (reporter.updatedAt < cutoff) live.reporters.delete(id);
+    }
+    if (!live.reporters.size) {
+        liveDevices.delete(key);
+        return true;
+    }
+    let latest = null;
+    for (const reporter of live.reporters.values()) {
+        if (!latest || reporter.updatedAt > latest.updatedAt) latest = reporter;
+    }
+    live.updatedAt = latest.updatedAt;
+    live.location = latest.location;
     return true;
 }
 function reportDeviceLocation(client, message) {
@@ -530,7 +596,7 @@ function reportDeviceLocation(client, message) {
     record.updatedAt = timestamp;
     if (client.platform) record.platform = client.platform;
     const live = liveDevices.get(key) || { reporters: new Map() };
-    live.reporters.set(client.clientId, timestamp);
+    live.reporters.set(client.clientId, { updatedAt: timestamp, location: location || record.lastLocation || null });
     live.updatedAt = timestamp;
     live.location = location || record.lastLocation || null;
     liveDevices.set(key, live);
@@ -663,7 +729,7 @@ function registerTracker(user, body) {
     let count = 0;
     for (const item of ownedTrackers.values()) if (item.userId === user.id) count++;
     if (count >= MAX_TRACKERS_PER_USER) throw httpError(409, `This account can register up to ${MAX_TRACKERS_PER_USER} trackers.`);
-    const record = { trackerId: key, deviceId, userId: user.id, name, createdAt: now(), updatedAt: now(), legacy: false };
+    const record = { trackerId: key, deviceId, userId: user.id, name, createdAt: now(), updatedAt: now(), lastLocation: null, lastSeenAt: null, legacy: false };
     ownedTrackers.set(key, record);
     try { saveTrackers(); }
     catch (error) { ownedTrackers.delete(key); throw error; }
@@ -774,26 +840,36 @@ function loadLastKnown() {
     if (!DATA_FILE) return;
     try {
         const data = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
+        let trackerFileNeedsUpdate = false;
         for (const item of Array.isArray(data) ? data : []) {
             const location = sanitizeLocation(item && item.location);
             const trackerId = clampText(item && item.trackerId, 140);
             if (!trackerId || !location) continue;
-            const savedState = {
-                ...item
-            };
+            const savedState = { ...item };
             const legacyMode = savedState.mode;
             savedState.trackerMode = ['normal', 'lost'].includes(savedState.trackerMode)
                 ? savedState.trackerMode
                 : (['normal', 'lost'].includes(legacyMode) ? legacyMode : null);
             delete savedState.mode;
             delete savedState.reporterId;
+            const current = lastKnown.get(trackerId);
+            const incomingUpdatedAt = Number(savedState.updatedAt) || 0;
+            const currentUpdatedAt = Number(current && current.updatedAt) || 0;
+            if (current && incomingUpdatedAt < currentUpdatedAt) continue;
             lastKnown.set(trackerId, {
                 ...savedState,
                 trackerId,
                 location,
                 live: false
             });
+            const record = ownedTrackers.get(trackerId);
+            if (record && incomingUpdatedAt >= (Number(record.lastSeenAt) || 0)) {
+                record.lastLocation = location;
+                record.lastSeenAt = incomingUpdatedAt || Number(record.lastSeenAt) || null;
+                trackerFileNeedsUpdate = true;
+            }
         }
+        if (trackerFileNeedsUpdate) scheduleTrackerSave();
         console.log(`Loaded ${lastKnown.size} last known position(s) from ${DATA_FILE}`);
     } catch (error) {
         if (error.code !== 'ENOENT') console.warn(`Could not load ${DATA_FILE}: ${error.message}`);
@@ -966,6 +1042,12 @@ function handleMessage(client, message) {
             client.trackerIds.add(state.trackerId);
             if (state.location) {
                 lastKnown.set(state.trackerId, { ...state, live: false });
+                const record = ownedTrackers.get(state.trackerId);
+                if (record) {
+                    record.lastLocation = state.location;
+                    record.lastSeenAt = state.updatedAt;
+                }
+                scheduleTrackerSave();
                 scheduleSave();
             }
             broadcastToUser(client.userId, { type: 'trackerState', state: publicState(state) });
@@ -1321,6 +1403,7 @@ function shutdown(signal) {
     shuttingDown = true;
     console.log(`${signal} received, saving data and shutting down.`);
     flushLastKnownSync();
+    flushTrackersSync();
     flushDevicesSync();
     for (const client of [...clients]) { try { closeClient(client, 1001); } catch (_) { } }
     server.close(() => process.exit(0));
