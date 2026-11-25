@@ -822,7 +822,7 @@
             const TRACKER_ID_UUID = '19b10002-e8f2-537e-4f6c-d104768a1214';
             const HEARTBEAT_UUID = '19b10003-e8f2-537e-4f6c-d104768a1214';
             const TRACKER_TTL_MS = 15000;
-            const DEVICE_TTL_MS = 90000;              // must match the backend; background tabs only report about once a minute
+            const DEVICE_TTL_MS = 90000;
             const DEVICE_REPORT_INTERVAL_MS = 12000;
             const RSSI_WINDOW_MS = 8000;
             const CAL_RSSI_1M = -59;
@@ -930,7 +930,6 @@
             function currentSelectedDevice() { return ownedDevices.find(d => d.deviceId === selectedDeviceId) || null; }
             function isCurrentDevice(deviceId) { return Boolean(currentDevice && currentDevice.deviceId === deviceId); }
             function ownLocation() { return { lat: myPosition[0], lng: myPosition[1], accuracy: Number.isFinite(myAccuracy) ? myAccuracy : null }; }
-            // For this browser's own device the live GPS position is used, not the (older) position it last reported.
             function getDeviceState(deviceId) {
               const state = deviceStates.get(deviceId) || ownedDevices.find(d => d.deviceId === deviceId) || null;
               return state && myPosition && isCurrentDevice(deviceId) ? { ...state, location: ownLocation() } : state;
@@ -1032,7 +1031,7 @@
               const marker = deviceMarkers.get(deviceId), device = getDeviceState(deviceId);
               if (!marker || !device || !(marker.isPopupOpen && marker.isPopupOpen())) return;
               const html = devicePopupHtml(device);
-              if (devicePopupCache.get(deviceId) === html) return; // rewriting an unchanged popup makes it flicker
+              if (devicePopupCache.get(deviceId) === html) return;
               devicePopupCache.set(deviceId, html);
               marker.setPopupContent(html);
             }
@@ -1051,7 +1050,6 @@
               deviceMarkerOnlineCache.delete(deviceId);
               devicePopupCache.delete(deviceId);
             }
-            // Stores a device state and updates its marker. Returns false when the state is older than the one shown.
             function drawDevice(device) {
               if (!device || !device.deviceId) return false;
               const id = device.deviceId, old = deviceStates.get(id);
@@ -1059,8 +1057,6 @@
               deviceStates.set(id, device);
               const location = device.location;
               const hasLocation = Boolean(location) && Number.isFinite(Number(location.lat)) && Number.isFinite(Number(location.lng));
-              // This browser's own device IS the blue "own position" marker. It used to be moved to the last position
-              // the server had (several seconds old) and turned grey whenever the server called the device offline.
               if (!hasLocation || (isCurrentDevice(id) && myMarker)) { removeDeviceMarker(id); return true; }
               const latlng = [Number(location.lat), Number(location.lng)];
               let marker = deviceMarkers.get(id);
@@ -1098,8 +1094,6 @@
                 currentDevice = list.find(device => device.deviceId === currentDevice.deviceId) || currentDevice;
               }
               if (selectedDeviceId && !known.has(selectedDeviceId)) selectedDeviceId = null;
-              // Only now is it known which devices exist. Doing this right after sign-in forgot this browser's
-              // registration whenever the first request to the backend failed.
               if (deviceRestorePending) { deviceRestorePending = false; restoreRegisteredDevice(); }
               renderTrackerList();
               updateDashboard();
@@ -1318,7 +1312,7 @@
                 myMarker.on('click', () => { if (currentDevice) selectDevice(currentDevice.deviceId, false); });
               } else myMarker.setLatLng(myPosition);
               if (currentDevice) {
-                removeDeviceMarker(currentDevice.deviceId); // the blue marker above represents it from now on
+                removeDeviceMarker(currentDevice.deviceId);
                 maybeSendCurrentDeviceReport();
               }
               if (!myAccuracyCircle) myAccuracyCircle = L.circle(myPosition, { radius: Math.max(1, myAccuracy || 1), color: '#2f81f7', fillColor: '#2f81f7', fillOpacity: .05, weight: 1 }).addTo(map);
@@ -1392,9 +1386,6 @@
               if (sendStop && currentDevice) sendWs({ type: 'deviceStop', deviceId: currentDevice.deviceId });
               lastDeviceReportSentAt = 0;
             }
-            // A browser is linked to one device entry. Once linked the button is greyed out; it comes back only after
-            // that entry is removed. Another browser on the same phone or computer links to the existing entry through
-            // the "Which device is this?" picker instead of creating a second one.
             function updateAddDeviceButton() {
               const button = $('addDeviceBtn'), registered = Boolean(currentDevice);
               const text = registered ? '✓ This device is added' : '+ Add this device';
@@ -1413,9 +1404,6 @@
               if (!taken.has(normalizeDeviceName(base))) return base;
               for (let i = 2; ; i++) if (!taken.has(normalizeDeviceName(`${base} ${i}`))) return `${base} ${i}`;
             }
-            // Asks which device this browser runs on. Resolves { kind: 'link', deviceId }, { kind: 'new', name } or null.
-            // Browsers cannot read a hardware ID of the phone or computer, so this is the user's choice; the backend
-            // pre-selects the entry last seen from the same network and operating system.
             let pickerDone = null;
             function chooseDevice(suggestedIds) {
               const picker = $('devicePicker'), list = $('pickerList'), hasDevices = ownedDevices.length > 0;
@@ -1460,13 +1448,12 @@
               closePicker({ kind: 'new', name });
             }
             async function addCurrentDeviceInner() {
-              // The list of devices may not have arrived yet (or this browser was linked in another tab).
               if (deviceRestorePending) await refreshSharedState();
               restoreRegisteredDevice();
               if (currentDevice) { log(`This browser already shares its location as ${currentDevice.name}.`); selectDevice(currentDevice.deviceId, false); return; }
               let suggestedIds = [];
               if (ownedDevices.length) {
-                try { suggestedIds = (await apiJson('/api/devices/suggest')).deviceIds || []; } catch (_) { } // only a hint
+                try { suggestedIds = (await apiJson('/api/devices/suggest')).deviceIds || []; } catch (_) { }
               }
               const choice = await chooseDevice(suggestedIds);
               if (!choice) return;
@@ -1492,7 +1479,7 @@
               const savedId = getSavedCurrentDeviceId();
               if (!savedId || currentDevice) return;
               const record = ownedDevices.find(item => item.deviceId === savedId);
-              if (!record) { saveCurrentDeviceId(''); return; } // removed from the account on another device
+              if (!record) { saveCurrentDeviceId(''); return; }
               currentDevice = record;
               drawDevice(record);
               startDeviceReporting();
@@ -2262,7 +2249,7 @@
               clearInterval(statePollTimer); statePollTimer = null;
               clearInterval(tickTimer); tickTimer = null;
               clearTimeout(reconnectTimer); reconnectTimer = null;
-              stopDeviceReporting(true); // before the socket is closed, or the "stop" message is never sent
+              stopDeviceReporting(true);
               try { sharedSocket?.close(); } catch (_) { }
               sharedSocket = null;
               stopActiveTracking(false);
@@ -2356,7 +2343,7 @@
               else if (el.dataset.renameDevice) renameDevice(el.dataset.renameDevice);
               else if (el.dataset.removeDevice) removeDevice(el.dataset.removeDevice);
             });
-            $('trackerMenu').addEventListener('pointerdown', () => { listPointerDown = true; }); // both lists live in the menu
+            $('trackerMenu').addEventListener('pointerdown', () => { listPointerDown = true; });
             for (const type of ['pointerup', 'pointercancel']) document.addEventListener(type, () => { listPointerDown = false; });
             $('modeToggle').addEventListener('change', event => setSelectedTrackerMode(event.target.checked ? 'lost' : 'normal'));
             $('authSwitch').addEventListener('click', () => setAuthMode(authMode === 'login' ? 'register' : 'login'));

@@ -19,8 +19,6 @@ const DATA_FILE = process.env.DATA_FILE || '';
 const AUTH_FILE = process.env.AUTH_FILE || (DATA_FILE ? path.join(path.dirname(DATA_FILE), 'auth.json') : '');
 const TRACKERS_FILE = process.env.TRACKERS_FILE || (DATA_FILE ? path.join(path.dirname(DATA_FILE), 'trackers.json') : '');
 const DEVICES_FILE = process.env.DEVICES_FILE || (DATA_FILE ? path.join(path.dirname(DATA_FILE), 'devices.json') : '');
-// A device reports every 12 s, but browsers slow the timers of a background tab down to one run per minute.
-// 45 s made a device in a background tab flip between online and offline every minute.
 const DEVICE_TTL_MS = Number(process.env.DEVICE_TTL_MS || 90000);
 const REGISTRATION_ENABLED = String(process.env.REGISTRATION_ENABLED || 'true').toLowerCase() !== 'false';
 const SESSION_COOKIE = 'opentag_session';
@@ -46,8 +44,8 @@ const sessions = new Map();
 const trackerStates = new Map();
 const lastKnown = new Map();
 const ownedTrackers = new Map();
-const ownedDevices = new Map(); // "userId:device:name" -> registered device record
-const liveDevices = new Map(); // same key -> the connection currently reporting it
+const ownedDevices = new Map();
+const liveDevices = new Map();
 const clients = new Set();
 const clientsByUser = new Map();
 const authRateLimits = new Map();
@@ -327,11 +325,6 @@ function loadTrackers() {
         if (error.code !== 'ENOENT') console.error(`Could not load tracker registry: ${error.message}`);
     }
 }
-// ---- Devices (phones, laptops…) that share their own GPS position ----
-// A device is identified by a permanent random ID, like a tracker by its hardware ID. Browsers cannot read any
-// hardware ID of the computer or phone they run on, so the identity is kept here and every browser on that
-// device is *linked* to the same entry (Chrome and Brave on one laptop are one device, not two).
-// Devices registered by v2.1.x used their lower-cased name as ID; those IDs are kept unchanged.
 const DEVICE_TYPES = ['phone', 'tablet', 'laptop', 'computer', 'other'];
 function normalizeDeviceName(value) {
     return clampText(value, 48).normalize('NFKC').replace(/\s+/g, ' ').trim().toLowerCase();
@@ -345,8 +338,6 @@ function scopedDeviceKey(userId, deviceId) {
 function newDeviceId() {
     return `dev-${crypto.randomBytes(9).toString('base64url')}`;
 }
-// Operating system from the User-Agent header. Only used to suggest which existing entry a new browser
-// belongs to; Chrome, Brave, Edge… on one machine all report the same operating system.
 function platformFromUserAgent(userAgent) {
     const ua = String(userAgent || '');
     if (/iPhone|iPad|iPod/i.test(ua)) return 'iOS';
@@ -357,14 +348,10 @@ function platformFromUserAgent(userAgent) {
     if (/Linux/i.test(ua)) return 'Linux';
     return '';
 }
-// Where each device was last seen from (network address + operating system). Kept in memory only: it is a hint
-// for "Which device is this?" and the address is never written to disk.
 const deviceSeenFrom = new Map();
 function rememberDeviceSeen(key, ip, platform) {
     if (key) deviceSeenFrom.set(key, { ip, platform, at: now() });
 }
-// Location reports arrive every few seconds from every device. Writing the whole registry to disk synchronously
-// for each one blocked the server; reports are now written at most once every 5 s (like tracker positions).
 let devicesDirty = false, deviceSaveTimer = null;
 function scheduleDeviceSave() {
     if (!DEVICES_FILE) return;
@@ -373,7 +360,7 @@ function scheduleDeviceSave() {
     deviceSaveTimer = setTimeout(() => {
         deviceSaveTimer = null;
         if (!devicesDirty) return;
-        try { saveDevices(); } catch (_) { scheduleDeviceSave(); } // already logged; try again later
+        try { saveDevices(); } catch (_) { scheduleDeviceSave(); }
     }, 5000);
     deviceSaveTimer.unref();
 }
@@ -403,7 +390,6 @@ function loadDevices() {
         const parsed = JSON.parse(fs.readFileSync(DEVICES_FILE, 'utf8'));
         for (const item of Array.isArray(parsed.devices) ? parsed.devices : []) {
             if (!item || typeof item.userId !== 'string' || typeof item.name !== 'string') continue;
-            // v2.1.x files: the ID was the normalized name. Keep it, so browsers that saved it stay linked.
             const deviceId = readDeviceId(item.deviceId) || normalizeDeviceName(item.name);
             if (!deviceId) continue;
             ownedDevices.set(scopedDeviceKey(item.userId, deviceId), {
@@ -460,8 +446,6 @@ function deviceNameTaken(userId, name, exceptKey = '') {
     return userDeviceRecords(userId).some(item =>
         scopedDeviceKey(userId, item.deviceId) !== exceptKey && normalizeDeviceName(item.name) === wanted);
 }
-// Devices of this account that were last seen from the same network and operating system as this request:
-// most likely the device this browser runs on.
 function suggestDevices(user, request) {
     const ip = getClientIp(request), platform = platformFromUserAgent(request.headers['user-agent']);
     const devices = userDeviceRecords(user.id).map(record => {
@@ -475,8 +459,6 @@ function suggestDevices(user, request) {
 function registerDevice(user, body, request) {
     const name = readDeviceName(body.name);
     const type = DEVICE_TYPES.includes(body.type) ? body.type : 'other';
-    // A second "My phone" is almost always the same phone added from another browser. Refusing it sends the user
-    // to the list of existing devices instead of quietly creating a duplicate.
     if (deviceNameTaken(user.id, name)) {
         throw httpError(409, 'A device with this name already exists. If this is that device, choose it from the list instead.');
     }
@@ -495,7 +477,6 @@ function registerDevice(user, body, request) {
     broadcastToUser(user.id, { type: 'deviceAdded', device: publicDevice(record) });
     return publicDevice(record);
 }
-// Another browser on an already registered device joins its entry.
 function linkDevice(user, body, request) {
     const { key, record } = findUserDevice(user, body.deviceId);
     rememberDeviceSeen(key, getClientIp(request), platformFromUserAgent(request.headers['user-agent']));
@@ -506,7 +487,6 @@ function renameDevice(user, body) {
     const name = readDeviceName(body.name);
     if (deviceNameTaken(user.id, name, key)) throw httpError(409, 'Another device in this account already uses that name. Choose a different name.');
     const previous = { name: record.name, updatedAt: record.updatedAt };
-    // The ID never changes, so live state and connections need no re-keying.
     record.name = name;
     record.updatedAt = now();
     try { saveDevices(); }
@@ -518,20 +498,19 @@ function deleteDevice(user, body) {
     const { key, record } = findUserDevice(user, body.deviceId);
     ownedDevices.delete(key);
     try { saveDevices(); }
-    catch (error) { ownedDevices.set(key, record); throw error; } // nothing else has been touched yet
+    catch (error) { ownedDevices.set(key, record); throw error; }
     liveDevices.delete(key);
     deviceSeenFrom.delete(key);
     for (const client of clientsByUser.get(user.id) || []) if (client.deviceKey === key) client.deviceKey = null;
     broadcastToUser(user.id, { type: 'deviceDeleted', deviceId: record.deviceId });
     return true;
 }
-// Removes one browser connection from a device's live state. Returns true when the device went offline.
 function dropDeviceReporter(key, clientId) {
     const live = liveDevices.get(key);
     if (!live || !live.reporters.delete(clientId)) return false;
     const cutoff = now() - DEVICE_TTL_MS;
     for (const [id, at] of live.reporters) if (at < cutoff) live.reporters.delete(id);
-    if (live.reporters.size) return false; // another browser on this device is still reporting
+    if (live.reporters.size) return false;
     liveDevices.delete(key);
     return true;
 }
@@ -544,9 +523,6 @@ function reportDeviceLocation(client, message) {
         const previousRecord = ownedDevices.get(client.deviceKey);
         if (previousRecord) broadcastToUser(client.userId, { type: 'deviceState', device: publicDevice(previousRecord) });
     }
-    // Several browsers may report the same device (Chrome and Brave on one laptop, or a page that reconnected
-    // while the server still holds its old connection). They are the same physical device, so the newest
-    // report is simply its current position.
     const location = sanitizeLocation(message.location);
     const timestamp = now();
     if (location) record.lastLocation = location;
