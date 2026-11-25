@@ -3,396 +3,146 @@
 const http = require('node:http');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
+const net = require('node:net');
 const path = require('node:path');
+const { promisify } = require('node:util');
 
-const APP_VERSION = (() => { try { return require('./package.json').version; } catch (_) { return 'dev'; } })();
-const HOST = process.env.HOST || '0.0.0.0';
-const PORT = Number(process.env.PORT || 3000);
-const WS_PATH = process.env.WS_PATH || '/ws';
-const TRACKER_TTL_MS = Number(process.env.TRACKER_TTL_MS || 15000);
-const MAX_MESSAGE_BYTES = 32 * 1024;
-const MAX_BODY_BYTES = 8 * 1024;
-const MAX_TRACKERS_PER_USER = 100;
-const MAX_DEVICES_PER_USER = 30;
-const PING_INTERVAL_MS = Number(process.env.PING_INTERVAL_MS || 25000);
-const DATA_FILE = process.env.DATA_FILE || '';
-const AUTH_FILE = process.env.AUTH_FILE || (DATA_FILE ? path.join(path.dirname(DATA_FILE), 'auth.json') : '');
-const TRACKERS_FILE = process.env.TRACKERS_FILE || (DATA_FILE ? path.join(path.dirname(DATA_FILE), 'trackers.json') : '');
-const DEVICES_FILE = process.env.DEVICES_FILE || (DATA_FILE ? path.join(path.dirname(DATA_FILE), 'devices.json') : '');
-const DEVICE_TTL_MS = Number(process.env.DEVICE_TTL_MS || 90000);
-const DEVICE_SUGGESTION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
-const REGISTRATION_ENABLED = String(process.env.REGISTRATION_ENABLED || 'true').toLowerCase() !== 'false';
-const SESSION_COOKIE = 'opentag_session';
-const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
-const USERNAME_RE = /^[a-zA-Z0-9._-]{3,32}$/;
-const PASSWORD_MIN_LENGTH = Math.max(0, Number(process.env.PASSWORD_MIN_LENGTH ?? 10) || 0);
+const scrypt = promisify(crypto.scrypt);
+const env = process.env;
+const now = Date.now;
+
+function intSetting(name, fallback, min, max) {
+    const raw = env[name];
+    if (raw === undefined || raw === '') return fallback;
+    const value = Number(raw);
+    if (Number.isSafeInteger(value) && value >= min && value <= max) return value;
+    console.warn(`Invalid ${name} value; using ${fallback}.`);
+    return fallback;
+}
+
+function wsPathSetting(value = '/ws') {
+    const candidate = String(value).trim().replace(/\/{2,}/g, '/').replace(/\/+$/, '');
+    if (candidate.startsWith('/') && !/[?#\\\0]/.test(candidate) && !candidate.split('/').some(part => part === '.' || part === '..')) return candidate;
+    console.warn('Invalid WS_PATH value; using /ws.');
+    return '/ws';
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+const HOST = String(env.HOST || '').trim() || '0.0.0.0';
+const PORT = intSetting('PORT', 3000, 0, 65535);
+const WS_PATH = wsPathSetting(env.WS_PATH);
+const TRACKER_TTL_MS = intSetting('TRACKER_TTL_MS', 15000, 1000, DAY_MS);
+const DEVICE_TTL_MS = intSetting('DEVICE_TTL_MS', 90000, 1000, DAY_MS);
+const PING_INTERVAL_MS = intSetting('PING_INTERVAL_MS', 25000, 1000, 600000);
+const PASSWORD_MIN_LENGTH = intSetting('PASSWORD_MIN_LENGTH', 10, 0, 128);
+const TRUSTED_PROXY_HOPS = intSetting('TRUSTED_PROXY_HOPS', 0, 0, 10);
+const TRUSTED_PROXIES = trustedProxySetting(env.TRUSTED_PROXY_IPS);
+const REGISTRATION_ENABLED = String(env.REGISTRATION_ENABLED || 'true').toLowerCase() !== 'false';
+const STATIC_DIR = env.STATIC_DIR ? path.resolve(env.STATIC_DIR) : '';
+const DATA_DIR = env.DATA_DIR || [env.AUTH_FILE, env.TRACKERS_FILE, env.DEVICES_FILE, env.DATA_FILE].filter(Boolean).map(file => path.dirname(file))[0] || '';
+const dataFile = (name, file) => env[name] || (DATA_DIR ? path.join(DATA_DIR, file) : '');
+
 const PASSWORD_MAX_LENGTH = 128;
-const SCRYPT_KEY_LENGTH = 64;
-const scryptAsync = require('node:util').promisify(crypto.scrypt);
-const TRUSTED_PROXY_HOPS = Math.max(0, Number(process.env.TRUSTED_PROXY_HOPS ?? 1) || 0);
-const STATIC_DIR = process.env.STATIC_DIR ? path.resolve(process.env.STATIC_DIR) : '';
-const MAX_WS_BACKLOG_BYTES = 1024 * 1024;
+const USERNAME_RE = /^[a-zA-Z0-9._-]{3,32}$/;
+const HARDWARE_ID_RE = /^[a-zA-Z0-9._:-]{6,100}$/;
+const TEMPORARY_ID_RE = /^(browser|legacy)-/;
+const SESSION_COOKIE = 'opentag_session';
+const SESSION_TTL_MS = 7 * DAY_MS;
+const SUGGESTION_TTL_MS = 7 * DAY_MS;
 const RATE_WINDOW_MS = 15 * 60 * 1000;
-const MAX_DEVICE_ID_LENGTH = 100;
+const RATE_LIMIT = 12;
+const SAVE_DELAY_MS = 5000;
+const SWEEP_INTERVAL_MS = 5000;
+const SCRYPT_KEY_LENGTH = 64;
+const NAME_MAX_LENGTH = 48;
+const MAX_BODY_BYTES = 8 * 1024;
+const MAX_MESSAGE_BYTES = 32 * 1024;
+const MAX_WS_BUFFER_BYTES = MAX_MESSAGE_BYTES * 4 + 64;
+const MAX_WS_BACKLOG_BYTES = 1024 * 1024;
+const WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
+const WS_CLOSE_CODES = new Set([1000, 1001, 1002, 1003, 1007, 1008, 1009, 1010, 1011, 1012, 1013, 1014]);
+const DEVICE_TYPES = new Set(['phone', 'tablet', 'laptop', 'computer', 'other']);
+const TRACKER_MODES = new Set(['normal', 'lost']);
+const SIGNAL_RANGES = { rssi: [-150, 0], txPower: [-100, 30], distanceM: [0, 100000] };
+const SECURITY_HEADERS = {
+    'X-Content-Type-Options': 'nosniff',
+    'X-Frame-Options': 'DENY',
+    'Referrer-Policy': 'strict-origin-when-cross-origin',
+};
+const CSP = "default-src 'self'; script-src 'self' 'unsafe-inline' https://unpkg.com; style-src 'self' 'unsafe-inline' https://unpkg.com; img-src 'self' data: blob: https://tile.openstreetmap.org; connect-src 'self' ws: wss:; font-src 'self' data: https://unpkg.com; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'";
 const STATIC_MIME = {
     '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
     '.json': 'application/json; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon',
 };
+const DUMMY_SALT = crypto.randomBytes(16);
+const utf8 = new TextDecoder('utf-8', { fatal: true });
 
 const users = new Map();
 const usersByName = new Map();
 const sessions = new Map();
-const trackerStates = new Map();
-const lastKnown = new Map();
-const ownedTrackers = new Map();
-const ownedDevices = new Map();
-const liveDevices = new Map();
 const clients = new Set();
 const clientsByUser = new Map();
-const authRateLimits = new Map();
-let saveTimer = null;
-let trackerSaveTimer = null;
-let trackersDirty = false;
-let saving = false;
-let dirty = false;
-const DUMMY_SALT = crypto.randomBytes(16);
+const authAttempts = new Map();
+let shuttingDown = false;
 
-function now() { return Date.now(); }
-function finiteNumber(value) {
-    if (typeof value === 'string') { if (!value.trim()) return null; }
-    else if (typeof value !== 'number') return null;
+function httpError(statusCode, message, headers) {
+    return Object.assign(new Error(message), { statusCode, expose: true, headers });
+}
+
+function num(value) {
+    if (typeof value === 'string' ? !value.trim() : typeof value !== 'number') return null;
     const n = Number(value);
     return Number.isFinite(n) ? n : null;
 }
-function validLatitude(value) {
-    const n = finiteNumber(value);
-    return n !== null && n >= -90 && n <= 90;
+
+function inRange(value, min, max) {
+    const n = num(value);
+    return n !== null && n >= min && n <= max ? n : null;
 }
-function validLongitude(value) {
-    const n = finiteNumber(value);
-    return n !== null && n >= -180 && n <= 180;
+
+function timestamp(value) {
+    const n = num(value);
+    return n !== null && n > 0 ? n : null;
 }
-function clampText(value, maxLength) {
-    if (typeof value !== 'string') return '';
-    return value.trim().slice(0, maxLength);
+
+function text(value, maxLength) {
+    return typeof value === 'string' ? value.trim().slice(0, maxLength) : '';
 }
-function jsonResponse(response, statusCode, data, extraHeaders = {}) {
-    response.writeHead(statusCode, {
-        'Content-Type': 'application/json; charset=utf-8',
-        'Cache-Control': 'no-store',
-        'X-Content-Type-Options': 'nosniff',
-        ...extraHeaders,
-    });
-    response.end(JSON.stringify(data));
+
+function validUserId(value) {
+    return typeof value === 'string' && value.length > 0 && value.length <= 128;
 }
-function safeUser(user) {
-    return {
-        id: user.id,
-        username: user.username,
-        createdAt: user.createdAt
+
+function normalizeName(value) {
+    return text(value, NAME_MAX_LENGTH).normalize('NFKC').replace(/\s+/g, ' ').toLowerCase();
+}
+
+function readName(value, fallback = '') {
+    const name = (text(value, NAME_MAX_LENGTH) || fallback).replace(/\s+/g, ' ');
+    if (!name) throw httpError(400, 'Name is required.');
+    return name;
+}
+
+function sanitizeLocation(location) {
+    const lat = inRange(location?.lat, -90, 90);
+    const lng = inRange(location?.lng, -180, 180);
+    return lat === null || lng === null ? null : { lat, lng, accuracy: inRange(location.accuracy, 0, 100000) };
+}
+
+function trackerFields(source, previous = {}) {
+    const fields = {
+        trackerMode: TRACKER_MODES.has(source.trackerMode) ? source.trackerMode : previous.trackerMode ?? null,
+        lastBlePacketAt: timestamp(source.lastBlePacketAt),
     };
+    for (const [name, [min, max]] of Object.entries(SIGNAL_RANGES)) fields[name] = inRange(source[name], min, max);
+    fields.txPower ??= previous.txPower ?? null;
+    return fields;
 }
-function hashSession(token) {
-    return crypto.createHash('sha256').update(token).digest('hex');
+
+function deviceFields(source) {
+    return { type: DEVICE_TYPES.has(source.type) ? source.type : 'other', platform: text(source.platform, 16) };
 }
-function parseCookies(header) {
-    const out = Object.create(null);
-    for (const part of String(header || '').split(';')) {
-        const index = part.indexOf('=');
-        if (index < 1) continue;
-        const key = part.slice(0, index).trim();
-        const value = part.slice(index + 1).trim();
-        try {
-            out[key] = decodeURIComponent(value);
-        } catch (_) {
-            out[key] = value;
-        }
-    }
-    return out;
-}
-function isSecureRequest(request) {
-    const forwarded = String(request.headers['x-forwarded-proto'] || '').split(',')[0].trim().toLowerCase();
-    return request.socket.encrypted === true || forwarded === 'https';
-}
-function cookieHeader(request, token, maxAgeSeconds) {
-    const bits = [`${SESSION_COOKIE}=${encodeURIComponent(token)}`, 'Path=/', 'HttpOnly', 'SameSite=Lax', `Max-Age=${maxAgeSeconds}`];
-    if (isSecureRequest(request)) bits.push('Secure');
-    return bits.join('; ');
-}
-function setSessionCookie(request, response, token) {
-    response.setHeader('Set-Cookie', cookieHeader(request, token, Math.floor(SESSION_TTL_MS / 1000)));
-}
-function clearSessionCookie(request, response) {
-    response.setHeader('Set-Cookie', cookieHeader(request, '', 0));
-}
-function getSessionUser(request) {
-    const cookies = parseCookies(request.headers.cookie);
-    const token = cookies[SESSION_COOKIE];
-    if (!token) return null;
-    const key = hashSession(token);
-    const session = sessions.get(key);
-    if (!session) return null;
-    if (session.expiresAt <= now()) {
-        sessions.delete(key);
-        return null;
-    }
-    const user = users.get(session.userId);
-    if (!user) {
-        sessions.delete(key);
-        return null;
-    }
-    return user;
-}
-function createSession(user) {
-    const token = crypto.randomBytes(32).toString('base64url');
-    sessions.set(hashSession(token), {
-        userId: user.id,
-        expiresAt: now() + SESSION_TTL_MS
-    });
-    return token;
-}
-function getClientIp(request) {
-    const parts = String(request.headers['x-forwarded-for'] || '').split(',').map(p => p.trim()).filter(Boolean);
-    if (TRUSTED_PROXY_HOPS > 0 && parts.length) {
-        return parts[Math.max(0, parts.length - TRUSTED_PROXY_HOPS)];
-    }
-    return request.socket.remoteAddress || 'unknown';
-}
-function rateLimitAuth(request, response, route) {
-    const key = `${route}:${getClientIp(request)}`;
-    const cutoff = now() - RATE_WINDOW_MS;
-    const timestamps = (authRateLimits.get(key) || []).filter(time => time > cutoff);
-    if (timestamps.length >= 12) {
-        authRateLimits.set(key, timestamps);
-        jsonResponse(response, 429, { error: 'Too many attempts. Please wait 15 minutes and try again.' }, { 'Retry-After': '900' });
-        return false;
-    }
-    timestamps.push(now());
-    authRateLimits.set(key, timestamps);
-    return true;
-}
-async function readJsonBody(request) {
-    const contentType = String(request.headers['content-type'] || '').toLowerCase();
-    if (!contentType.startsWith('application/json')) {
-        const error = new Error('Content-Type must be application/json');
-        error.statusCode = 415;
-        throw error;
-    }
-    const declaredLength = Number(request.headers['content-length'] || 0);
-    if (declaredLength > MAX_BODY_BYTES) {
-        const error = new Error('Request body is too large');
-        error.statusCode = 413;
-        throw error;
-    }
-    const chunks = [];
-    let total = 0;
-    for await (const chunk of request) {
-        total += chunk.length;
-        if (total > MAX_BODY_BYTES) {
-            const error = new Error('Request body is too large');
-            error.statusCode = 413;
-            throw error;
-        }
-        chunks.push(chunk);
-    }
-    try {
-        const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
-        if (!body || typeof body !== 'object' || Array.isArray(body)) throw new Error('Expected an object');
-        return body;
-    } catch (_) {
-        const error = new Error('Invalid JSON body');
-        error.statusCode = 400;
-        throw error;
-    }
-}
-function lastKnownJson() {
-    return JSON.stringify([...lastKnown.values()].map(({ reporterId, ...rest }) => rest));
-}
-function scheduleSave() {
-    if (!DATA_FILE) return;
-    dirty = true;
-    if (saveTimer || saving) return;
-    saveTimer = setTimeout(persistLastKnown, 5000);
-}
-async function persistLastKnown() {
-    saveTimer = null;
-    if (!dirty || !DATA_FILE) return;
-    dirty = false;
-    saving = true;
-    const tmp = `${DATA_FILE}.tmp`;
-    try {
-        await fs.promises.mkdir(path.dirname(DATA_FILE), { recursive: true });
-        await fs.promises.writeFile(tmp, lastKnownJson(), { mode: 0o600 });
-        await fs.promises.rename(tmp, DATA_FILE);
-    } catch (error) {
-        dirty = true;
-        console.warn(`Could not save ${DATA_FILE}: ${error.message}`);
-    } finally {
-        saving = false;
-        if (dirty && !saveTimer) saveTimer = setTimeout(persistLastKnown, 5000);
-    }
-}
-function flushLastKnownSync() {
-    if (!DATA_FILE || !dirty) return;
-    const tmp = `${DATA_FILE}.tmp`;
-    try {
-        fs.mkdirSync(path.dirname(DATA_FILE), { recursive: true });
-        fs.writeFileSync(tmp, lastKnownJson(), { mode: 0o600 });
-        fs.renameSync(tmp, DATA_FILE);
-        dirty = false;
-    } catch (error) {
-        console.warn(`Could not save ${DATA_FILE}: ${error.message}`);
-    }
-}
-function saveLastKnownNow() {
-    dirty = true;
-    flushLastKnownSync();
-    scheduleTrackerSave();
-}
-function saveUsers() {
-    if (!AUTH_FILE) {
-        console.warn('AUTH_FILE is not configured; registered users will not survive a restart. Configure a persistent /data directory.');
-        return;
-    }
-    const tmp = `${AUTH_FILE}.tmp`;
-    try {
-        fs.mkdirSync(path.dirname(AUTH_FILE), {
-            recursive: true
-        });
-        fs.writeFileSync(tmp, JSON.stringify({
-            version: 1,
-            users: [...users.values()]
-        }), {
-            mode: 0o600
-        });
-        fs.renameSync(tmp, AUTH_FILE);
-    } catch (error) {
-        console.error(`Could not save authentication database ${AUTH_FILE}: ${error.message}`);
-        throw new Error('Could not save account data. Check that the persistent data directory is writable.');
-    }
-}
-function loadUsers() {
-    if (!AUTH_FILE) {
-        console.warn('AUTH_FILE is not configured; account database will be memory-only.');
-        return;
-    }
-    try {
-        const parsed = JSON.parse(fs.readFileSync(AUTH_FILE, 'utf8'));
-        for (const item of Array.isArray(parsed.users) ? parsed.users : []) {
-            if (!item || typeof item.id !== 'string' || typeof item.username !== 'string' ||
-                typeof item.passwordSalt !== 'string' || typeof item.passwordHash !== 'string') continue;
-            if (usersByName.has(item.username)) continue;
-            users.set(item.id, item);
-            usersByName.set(item.username, item);
-        }
-        console.log(`Loaded ${users.size} account(s) from ${AUTH_FILE}`);
-    } catch (error) {
-        if (error.code !== 'ENOENT') console.error(`Could not load account database: ${error.message}`);
-    }
-}
-function syncTrackerPositionFields() {
-    for (const [trackerId, state] of lastKnown) {
-        const record = ownedTrackers.get(trackerId);
-        if (!record || !state.location) continue;
-        record.lastLocation = sanitizeLocation(state.location);
-        record.lastSeenAt = Number(state.updatedAt) || Number(record.lastSeenAt) || null;
-    }
-}
-function scheduleTrackerSave() {
-    if (!TRACKERS_FILE) return;
-    syncTrackerPositionFields();
-    trackersDirty = true;
-    if (trackerSaveTimer) return;
-    trackerSaveTimer = setTimeout(() => {
-        trackerSaveTimer = null;
-        if (!trackersDirty) return;
-        try { saveTrackers(); }
-        catch (_) { scheduleTrackerSave(); }
-    }, 5000);
-    trackerSaveTimer.unref();
-}
-function flushTrackersSync() {
-    if (!TRACKERS_FILE || !trackersDirty) return;
-    try { saveTrackers(); } catch (_) { }
-}
-function saveTrackers() {
-    if (!TRACKERS_FILE) {
-        console.warn('TRACKERS_FILE is not configured; tracker registry will be memory-only.');
-        return;
-    }
-    syncTrackerPositionFields();
-    const tmp = `${TRACKERS_FILE}.tmp`;
-    try {
-        fs.mkdirSync(path.dirname(TRACKERS_FILE), {
-            recursive: true
-        });
-        fs.writeFileSync(tmp, JSON.stringify({
-            version: 3,
-            trackers: [...ownedTrackers.values()].map(record => ({
-                ...record,
-                lastLocation: sanitizeLocation(record.lastLocation),
-                lastSeenAt: Number(record.lastSeenAt) || null,
-            }))
-        }), {
-            mode: 0o600
-        });
-        fs.renameSync(tmp, TRACKERS_FILE);
-        trackersDirty = false;
-        if (trackerSaveTimer) {
-            clearTimeout(trackerSaveTimer);
-            trackerSaveTimer = null;
-        }
-    } catch (error) {
-        console.error(`Could not save tracker registry ${TRACKERS_FILE}: ${error.message}`);
-        throw new Error('Could not save tracker registry. Check that the persistent data directory is writable.');
-    }
-}
-function loadTrackers() {
-    if (!TRACKERS_FILE) {
-        console.warn('TRACKERS_FILE is not configured; tracker registry will be memory-only.');
-        return;
-    }
-    try {
-        const parsed = JSON.parse(fs.readFileSync(TRACKERS_FILE, 'utf8'));
-        for (const item of Array.isArray(parsed.trackers) ? parsed.trackers : []) {
-            if (!item || typeof item.trackerId !== 'string' || typeof item.userId !== 'string' ||
-                typeof item.deviceId !== 'string' || typeof item.name !== 'string') continue;
-            const record = {
-                ...item,
-                lastLocation: sanitizeLocation(item.lastLocation),
-                lastSeenAt: Number(item.lastSeenAt) || null,
-            };
-            ownedTrackers.set(item.trackerId, record);
-            if (record.lastLocation) {
-                lastKnown.set(item.trackerId, {
-                    trackerId: item.trackerId,
-                    deviceId: item.deviceId,
-                    trackerName: item.name,
-                    userId: item.userId,
-                    location: record.lastLocation,
-                    updatedAt: record.lastSeenAt || Number(record.updatedAt) || Number(record.createdAt) || now(),
-                    live: false,
-                });
-            }
-        }
-        console.log(`Loaded ${ownedTrackers.size} registered tracker(s) from ${TRACKERS_FILE}`);
-    } catch (error) {
-        if (error.code !== 'ENOENT') console.error(`Could not load tracker registry: ${error.message}`);
-    }
-}
-const DEVICE_TYPES = ['phone', 'tablet', 'laptop', 'computer', 'other'];
-function normalizeDeviceName(value) {
-    return clampText(value, 48).normalize('NFKC').replace(/\s+/g, ' ').trim().toLowerCase();
-}
-function readDeviceId(value) {
-    return typeof value === 'string' && value.length <= 64 ? value : '';
-}
-function scopedDeviceKey(userId, deviceId) {
-    return deviceId ? `${userId}:device:${deviceId}` : '';
-}
-function newDeviceId() {
-    return `dev-${crypto.randomBytes(9).toString('base64url')}`;
-}
+
 function platformFromUserAgent(userAgent) {
     const ua = String(userAgent || '');
     if (/iPhone|iPad|iPod/i.test(ua)) return 'iOS';
@@ -403,876 +153,608 @@ function platformFromUserAgent(userAgent) {
     if (/Linux/i.test(ua)) return 'Linux';
     return '';
 }
-const deviceSeenFrom = new Map();
-function rememberDeviceSeen(key, ip, platform) {
-    if (key) deviceSeenFrom.set(key, { ip, platform, at: now() });
-}
-let devicesDirty = false, deviceSaveTimer = null;
-function scheduleDeviceSave() {
-    if (!DEVICES_FILE) return;
-    devicesDirty = true;
-    if (deviceSaveTimer) return;
-    deviceSaveTimer = setTimeout(() => {
-        deviceSaveTimer = null;
-        if (!devicesDirty) return;
-        try { saveDevices(); } catch (_) { scheduleDeviceSave(); }
-    }, 5000);
-    deviceSaveTimer.unref();
-}
-function flushDevicesSync() {
-    if (!devicesDirty) return;
-    try { saveDevices(); } catch (_) { }
-}
-function saveDevices() {
-    if (!DEVICES_FILE) return;
-    const tmp = `${DEVICES_FILE}.tmp`;
-    try {
-        fs.mkdirSync(path.dirname(DEVICES_FILE), { recursive: true });
-        fs.writeFileSync(tmp, JSON.stringify({ version: 2, devices: [...ownedDevices.values()] }), { mode: 0o600 });
-        fs.renameSync(tmp, DEVICES_FILE);
-        devicesDirty = false;
-    } catch (error) {
-        console.error(`Could not save device registry ${DEVICES_FILE}: ${error.message}`);
-        throw new Error('Could not save device registry. Check that the persistent data directory is writable.');
-    }
-}
-function loadDevices() {
-    if (!DEVICES_FILE) {
-        console.warn('DEVICES_FILE is not configured; device registry will be memory-only.');
-        return;
-    }
-    try {
-        const parsed = JSON.parse(fs.readFileSync(DEVICES_FILE, 'utf8'));
-        for (const item of Array.isArray(parsed.devices) ? parsed.devices : []) {
-            if (!item || typeof item.userId !== 'string' || typeof item.name !== 'string') continue;
-            const deviceId = readDeviceId(item.deviceId) || normalizeDeviceName(item.name);
-            if (!deviceId) continue;
-            ownedDevices.set(scopedDeviceKey(item.userId, deviceId), {
-                deviceId,
-                userId: item.userId,
-                name: clampText(item.name, 48) || item.name,
-                type: DEVICE_TYPES.includes(item.type) ? item.type : 'other',
-                platform: typeof item.platform === 'string' ? clampText(item.platform, 16) : '',
-                createdAt: Number(item.createdAt) || now(),
-                updatedAt: Number(item.updatedAt) || Number(item.lastSeenAt) || now(),
-                lastSeenAt: Number(item.lastSeenAt) || null,
-                lastLocation: sanitizeLocation(item.lastLocation),
-            });
-        }
-        console.log(`Loaded ${ownedDevices.size} registered device(s) from ${DEVICES_FILE}`);
-    } catch (error) {
-        if (error.code !== 'ENOENT') console.error(`Could not load device registry: ${error.message}`);
-    }
-}
-function isDeviceLive(live) {
-    return Boolean(live && now() - live.updatedAt <= DEVICE_TTL_MS);
-}
-function publicDevice(record) {
-    const live = liveDevices.get(scopedDeviceKey(record.userId, record.deviceId));
-    const online = isDeviceLive(live);
-    const { userId, lastLocation, ...safe } = record;
-    return {
-        ...safe,
-        location: live?.location || lastLocation || null,
-        online,
-        updatedAt: online ? live.updatedAt : (record.lastSeenAt || record.updatedAt),
-        lastSeenAt: record.lastSeenAt || null,
-    };
-}
-function userDeviceRecords(userId) {
-    return [...ownedDevices.values()].filter(item => item.userId === userId);
-}
-function devicesForUser(userId) {
-    return userDeviceRecords(userId).sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0)).map(publicDevice);
-}
-function findUserDevice(user, deviceId) {
-    const key = scopedDeviceKey(user.id, readDeviceId(deviceId));
-    const record = key && ownedDevices.get(key);
-    if (!record || record.userId !== user.id) throw httpError(404, 'Device not found in this account.');
-    return { key, record };
-}
-function readDeviceName(value) {
-    const name = clampText(value, 48).replace(/\s+/g, ' ');
-    if (name.length < 2 || !normalizeDeviceName(name)) throw httpError(400, 'Device name must contain at least 2 characters.');
-    return name;
-}
-function deviceNameTaken(userId, name, exceptKey = '') {
-    const wanted = normalizeDeviceName(name);
-    return userDeviceRecords(userId).some(item =>
-        scopedDeviceKey(userId, item.deviceId) !== exceptKey && normalizeDeviceName(item.name) === wanted);
-}
-function suggestDevices(user, request) {
-    const ip = getClientIp(request), platform = platformFromUserAgent(request.headers['user-agent']);
-    const devices = userDeviceRecords(user.id).map(record => {
-        const seen = deviceSeenFrom.get(scopedDeviceKey(user.id, record.deviceId));
-        const recent = Boolean(seen && now() - seen.at <= DEVICE_SUGGESTION_TTL_MS);
-        const samePlatform = Boolean(platform) && (seen?.platform || record.platform) === platform;
-        return { record, at: seen?.at || 0, likely: recent && samePlatform && seen.ip === ip };
-    }).filter(item => item.likely);
-    devices.sort((a, b) => b.at - a.at);
-    return { platform, deviceIds: devices.map(item => item.record.deviceId) };
-}
-function registerDevice(user, body, request) {
-    const name = readDeviceName(body.name);
-    const type = DEVICE_TYPES.includes(body.type) ? body.type : 'other';
-    if (deviceNameTaken(user.id, name)) {
-        throw httpError(409, 'A device with this name already exists. If this is that device, choose it from the list instead.');
-    }
-    if (userDeviceRecords(user.id).length >= MAX_DEVICES_PER_USER) {
-        throw httpError(409, `This account can register up to ${MAX_DEVICES_PER_USER} devices.`);
-    }
-    let deviceId = newDeviceId();
-    while (ownedDevices.has(scopedDeviceKey(user.id, deviceId))) deviceId = newDeviceId();
-    const key = scopedDeviceKey(user.id, deviceId);
-    const platform = platformFromUserAgent(request?.headers['user-agent']);
-    const record = { deviceId, userId: user.id, name, type, platform, createdAt: now(), updatedAt: now(), lastSeenAt: null, lastLocation: null };
-    ownedDevices.set(key, record);
-    try { saveDevices(); }
-    catch (error) { ownedDevices.delete(key); throw error; }
-    if (request) rememberDeviceSeen(key, getClientIp(request), platform);
-    broadcastToUser(user.id, { type: 'deviceAdded', device: publicDevice(record) });
-    return publicDevice(record);
-}
-function linkDevice(user, body, request) {
-    const { key, record } = findUserDevice(user, body.deviceId);
-    rememberDeviceSeen(key, getClientIp(request), platformFromUserAgent(request.headers['user-agent']));
-    return publicDevice(record);
-}
-function renameDevice(user, body) {
-    const { key, record } = findUserDevice(user, body.deviceId);
-    const name = readDeviceName(body.name);
-    if (deviceNameTaken(user.id, name, key)) throw httpError(409, 'Another device in this account already uses that name. Choose a different name.');
-    const previous = { name: record.name, updatedAt: record.updatedAt };
-    record.name = name;
-    record.updatedAt = now();
-    try { saveDevices(); }
-    catch (error) { Object.assign(record, previous); throw error; }
-    broadcastToUser(user.id, { type: 'deviceRenamed', previousDeviceId: record.deviceId, device: publicDevice(record) });
-    return publicDevice(record);
-}
-function deleteDevice(user, body) {
-    const { key, record } = findUserDevice(user, body.deviceId);
-    ownedDevices.delete(key);
-    try { saveDevices(); }
-    catch (error) { ownedDevices.set(key, record); throw error; }
-    liveDevices.delete(key);
-    deviceSeenFrom.delete(key);
-    for (const client of clientsByUser.get(user.id) || []) if (client.deviceKey === key) client.deviceKey = null;
-    broadcastToUser(user.id, { type: 'deviceDeleted', deviceId: record.deviceId });
-    return true;
-}
-function dropDeviceReporter(key, clientId) {
-    const live = liveDevices.get(key);
-    if (!live || !live.reporters.delete(clientId)) return false;
-    const cutoff = now() - DEVICE_TTL_MS;
-    for (const [id, reporter] of live.reporters) {
-        if (reporter.updatedAt < cutoff) live.reporters.delete(id);
-    }
-    if (!live.reporters.size) {
-        liveDevices.delete(key);
-        return true;
-    }
-    let latest = null;
-    for (const reporter of live.reporters.values()) {
-        if (!latest || reporter.updatedAt > latest.updatedAt) latest = reporter;
-    }
-    live.updatedAt = latest.updatedAt;
-    live.location = latest.location;
-    return true;
-}
-function reportDeviceLocation(client, message) {
-    const deviceId = readDeviceId(message.deviceId);
-    const key = scopedDeviceKey(client.userId, deviceId);
-    const record = key && ownedDevices.get(key);
-    if (!record) throw new Error('This device is not registered to your account. Add this device from the menu first.');
-    if (client.deviceKey && client.deviceKey !== key && dropDeviceReporter(client.deviceKey, client.clientId)) {
-        const previousRecord = ownedDevices.get(client.deviceKey);
-        if (previousRecord) broadcastToUser(client.userId, { type: 'deviceState', device: publicDevice(previousRecord) });
-    }
-    const location = sanitizeLocation(message.location);
-    const timestamp = now();
-    if (location) record.lastLocation = location;
-    record.lastSeenAt = timestamp;
-    record.updatedAt = timestamp;
-    if (client.platform) record.platform = client.platform;
-    const live = liveDevices.get(key) || { reporters: new Map() };
-    live.reporters.set(client.clientId, { updatedAt: timestamp, location: location || record.lastLocation || null });
-    live.updatedAt = timestamp;
-    live.location = location || record.lastLocation || null;
-    liveDevices.set(key, live);
-    client.deviceKey = key;
-    rememberDeviceSeen(key, client.ip, client.platform);
-    scheduleDeviceSave();
-    broadcastToUser(client.userId, { type: 'deviceState', device: publicDevice(record) });
-}
-function stopDeviceReporting(client, deviceId = '') {
-    const key = deviceId ? scopedDeviceKey(client.userId, readDeviceId(deviceId)) : client.deviceKey;
-    if (!key) return;
-    if (dropDeviceReporter(key, client.clientId)) {
-        const record = ownedDevices.get(key);
-        if (record) broadcastToUser(client.userId, { type: 'deviceState', device: publicDevice(record) });
-    }
-    if (client.deviceKey === key) client.deviceKey = null;
-}
-function removeStaleDevices() {
-    const cutoff = now() - DEVICE_TTL_MS;
-    for (const [key, live] of liveDevices) {
-        if (live.updatedAt >= cutoff) continue;
-        liveDevices.delete(key);
-        const record = ownedDevices.get(key);
-        if (record) broadcastToUser(record.userId, { type: 'deviceState', device: publicDevice(record) });
-    }
-}
-function publicTracker(record) {
-    const { userId, ...safe } = record;
-    return safe;
-}
-function trackersForUser(userId) {
-    return [...ownedTrackers.values()]
-        .filter(item => item.userId === userId)
-        .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0))
-        .map(publicTracker);
-}
-function findTrackerForUser(userId, deviceIdOrName) {
-    const value = clampText(deviceIdOrName, MAX_DEVICE_ID_LENGTH);
-    if (!value) return null;
-    const exact = ownedTrackers.get(scopedTrackerId(userId, value));
-    if (exact) return exact;
-    for (const item of ownedTrackers.values()) if (item.userId === userId && item.name === value) return item;
-    return null;
-}
-function ensureLegacyTrackerRecords() {
-    let registryChanged = false;
-    let positionsChanged = false;
-    for (const [oldKey, state] of [...lastKnown.entries()]) {
-        if (!state.userId || ownedTrackers.has(oldKey)) continue;
-        if (state.deviceId) {
-            lastKnown.delete(oldKey);
-            positionsChanged = true;
-            continue;
-        }
-        const prefix = `${state.userId}:`;
-        const legacyName = oldKey.startsWith(prefix) ? oldKey.slice(prefix.length) : (state.trackerName || oldKey);
-        const deviceId = `legacy-${legacyName.replace(/[^a-zA-Z0-9._-]/g, '-').slice(0, 80)}`;
-        const newKey = scopedTrackerId(state.userId, deviceId);
-        const record = {
-            trackerId: newKey,
-            deviceId,
-            userId: state.userId,
-            name: clampText(state.trackerName || legacyName, 48) || 'OpenTag tracker',
-            createdAt: state.updatedAt || now(),
-            updatedAt: now(),
-            legacy: true,
-        };
-        ownedTrackers.set(newKey, record);
-        lastKnown.delete(oldKey);
-        lastKnown.set(newKey, { ...state, trackerId: newKey, deviceId, trackerName: record.name, userId: state.userId, live: false });
-        registryChanged = positionsChanged = true;
-    }
-    if (registryChanged) {
-        saveTrackers();
-        console.log('Migrated previously saved tracker positions into the v2 tracker registry.');
-    }
-    if (positionsChanged) saveLastKnownNow();
-}
-function migrateLegacyNamedTracker(userId, name, deviceId) {
-    const normalizedName = name.toLowerCase();
-    let legacy = null;
-    for (const item of ownedTrackers.values()) {
-        if (item.userId !== userId || !item.legacy) continue;
-        const legacyName = item.name.toLowerCase();
-        if (legacyName === normalizedName || normalizedName.startsWith(`${legacyName}-`)) { legacy = item; break; }
-    }
-    if (!legacy) return null;
-    const oldKey = legacy.trackerId;
-    const newKey = scopedTrackerId(userId, deviceId);
-    const updated = { ...legacy, trackerId: newKey, deviceId, legacy: false, updatedAt: now() };
-    ownedTrackers.delete(oldKey);
-    ownedTrackers.set(newKey, updated);
-    try { saveTrackers(); }
-    catch (error) { ownedTrackers.delete(newKey); ownedTrackers.set(oldKey, legacy); throw error; }
-    const previous = lastKnown.get(oldKey);
-    if (previous) {
-        lastKnown.delete(oldKey);
-        lastKnown.set(newKey, { ...previous, trackerId: newKey, deviceId, trackerName: updated.name });
-    }
-    const live = trackerStates.get(oldKey);
-    if (live) {
-        trackerStates.delete(oldKey);
-        trackerStates.set(newKey, { ...live, trackerId: newKey, deviceId, trackerName: updated.name });
-    }
-    if (previous) saveLastKnownNow();
-    return updated;
-}
-function httpError(statusCode, message) {
-    const error = new Error(message);
-    error.statusCode = statusCode;
-    return error;
-}
-function registerTracker(user, body) {
-    const deviceId = typeof body.deviceId === 'string' ? body.deviceId.trim() : '';
-    const name = clampText(body.name || 'OpenTag tracker', 48);
-    if (!new RegExp(`^[a-zA-Z0-9._:-]{6,${MAX_DEVICE_ID_LENGTH}}$`).test(deviceId)) {
-        throw httpError(400, 'Invalid tracker hardware ID. Update the tracker firmware and try again.');
-    }
-    if (!name) throw httpError(400, 'Tracker name is required.');
-    for (const item of ownedTrackers.values()) {
-        if (item.deviceId === deviceId && item.userId !== user.id) {
-            throw httpError(409, 'This tracker is already registered to another account.');
-        }
-    }
-    const key = scopedTrackerId(user.id, deviceId);
-    const existing = ownedTrackers.get(key);
-    if (existing) return publicTracker(existing);
-    const migrated = migrateLegacyNamedTracker(user.id, name, deviceId);
-    if (migrated) return publicTracker(migrated);
-    let count = 0;
-    for (const item of ownedTrackers.values()) if (item.userId === user.id) count++;
-    if (count >= MAX_TRACKERS_PER_USER) throw httpError(409, `This account can register up to ${MAX_TRACKERS_PER_USER} trackers.`);
-    const record = { trackerId: key, deviceId, userId: user.id, name, createdAt: now(), updatedAt: now(), lastLocation: null, lastSeenAt: null, legacy: false };
-    ownedTrackers.set(key, record);
-    try { saveTrackers(); }
-    catch (error) { ownedTrackers.delete(key); throw error; }
-    broadcastToUser(user.id, { type: 'trackerAdded', tracker: publicTracker(record) });
-    return publicTracker(record);
-}
-function isTemporaryDeviceId(deviceId) {
-    return String(deviceId || '').startsWith('browser-') || String(deviceId || '').startsWith('legacy-');
-}
-function rebindTracker(user, body) {
-    const oldTrackerId = clampText(body.trackerId, 160);
-    const deviceId = typeof body.deviceId === 'string' ? body.deviceId.trim() : '';
-    const record = ownedTrackers.get(oldTrackerId);
-    if (!record || record.userId !== user.id) throw httpError(404, 'Tracker not found in this account.');
-    if (!new RegExp(`^[a-zA-Z0-9._:-]{6,${MAX_DEVICE_ID_LENGTH}}$`).test(deviceId) || isTemporaryDeviceId(deviceId)) {
-        throw httpError(400, 'A permanent tracker hardware ID is required. Update the tracker firmware and try again.');
-    }
-    const newTrackerId = scopedTrackerId(user.id, deviceId);
-    if (newTrackerId === oldTrackerId) return publicTracker(record);
-    if (!record.legacy && !isTemporaryDeviceId(record.deviceId)) {
-        throw httpError(409, 'This tracker already has a permanent hardware ID and cannot be rebound automatically.');
-    }
-    for (const item of ownedTrackers.values()) {
-        if (item.deviceId === deviceId && item.userId !== user.id) throw httpError(409, 'This tracker is already registered to another account.');
-    }
-    const existing = ownedTrackers.get(newTrackerId);
-    const previousKnown = lastKnown.get(oldTrackerId);
-    const previousLive = trackerStates.get(oldTrackerId);
-    if (existing) {
-        ownedTrackers.delete(oldTrackerId);
-        try { saveTrackers(); }
-        catch (error) { ownedTrackers.set(oldTrackerId, record); throw error; }
-        const currentKnown = lastKnown.get(newTrackerId);
-        if (previousKnown && (!currentKnown || (previousKnown.updatedAt || 0) > (currentKnown.updatedAt || 0))) {
-            lastKnown.set(newTrackerId, { ...previousKnown, trackerId: newTrackerId, deviceId, trackerName: existing.name });
-        }
-        lastKnown.delete(oldTrackerId);
-        trackerStates.delete(oldTrackerId);
-        saveLastKnownNow();
-        broadcastToUser(user.id, { type: 'trackerDeleted', trackerId: oldTrackerId, reason: 'tracker_rebound' });
-        return publicTracker(existing);
-    }
-    const updated = { ...record, trackerId: newTrackerId, deviceId, legacy: false, updatedAt: now() };
-    ownedTrackers.delete(oldTrackerId);
-    ownedTrackers.set(newTrackerId, updated);
-    try { saveTrackers(); }
-    catch (error) { ownedTrackers.delete(newTrackerId); ownedTrackers.set(oldTrackerId, record); throw error; }
-    if (previousKnown) {
-        lastKnown.delete(oldTrackerId);
-        lastKnown.set(newTrackerId, { ...previousKnown, trackerId: newTrackerId, deviceId, trackerName: updated.name });
-    }
-    if (previousLive) {
-        trackerStates.delete(oldTrackerId);
-        trackerStates.set(newTrackerId, { ...previousLive, trackerId: newTrackerId, deviceId, trackerName: updated.name });
-    }
-    if (previousKnown) saveLastKnownNow();
-    broadcastToUser(user.id, { type: 'trackerDeleted', trackerId: oldTrackerId, reason: 'tracker_rebound' });
-    return publicTracker(updated);
-}
-function renameTracker(user, body) {
-    const trackerId = clampText(body.trackerId, 160);
-    const name = clampText(body.name, 48);
-    const record = ownedTrackers.get(trackerId);
-    if (!record || record.userId !== user.id) throw httpError(404, 'Tracker not found in this account.');
-    if (!name) throw httpError(400, 'Tracker name is required.');
-    const previousName = record.name;
-    const previousUpdatedAt = record.updatedAt;
-    record.name = name;
-    record.updatedAt = now();
-    try { saveTrackers(); }
-    catch (error) { record.name = previousName; record.updatedAt = previousUpdatedAt; throw error; }
-    for (const stateMap of [trackerStates, lastKnown]) {
-        const state = stateMap.get(trackerId);
-        if (state) state.trackerName = name;
-    }
-    scheduleSave();
-    broadcastToUser(user.id, { type: 'trackerRenamed', trackerId, name });
-    return publicTracker(record);
-}
-function deleteTracker(user, body) {
-    const trackerId = clampText(body.trackerId, 160);
-    const record = ownedTrackers.get(trackerId);
-    if (!record || record.userId !== user.id) throw httpError(404, 'Tracker not found in this account.');
-    ownedTrackers.delete(trackerId);
-    try { saveTrackers(); }
-    catch (error) { ownedTrackers.set(trackerId, record); throw error; }
-    trackerStates.delete(trackerId);
-    lastKnown.delete(trackerId);
-    saveLastKnownNow();
-    broadcastToUser(user.id, { type: 'trackerDeleted', trackerId });
-    return true;
+
+function forwardedValues(header) {
+    return String(header || '').split(',').map(part => part.trim()).filter(Boolean);
 }
 
-function sanitizeLocation(location) {
-    if (!location || !validLatitude(location.lat) || !validLongitude(location.lng)) return null;
-    const accuracy = finiteNumber(location.accuracy);
-    return {
-        lat: Number(location.lat),
-        lng: Number(location.lng),
-        accuracy: accuracy !== null && accuracy >= 0 && accuracy <= 100000 ? accuracy : null,
-    };
+function normalizedIp(value) {
+    const ip = String(value || '').trim().toLowerCase();
+    return ip.startsWith('::ffff:') && net.isIPv4(ip.slice(7)) ? ip.slice(7) : ip;
 }
-function scopedTrackerId(userId, rawTrackerId) {
-    const clean = clampText(rawTrackerId, 100);
-    return clean ? `${userId}:${clean}` : '';
-}
-function loadLastKnown() {
-    if (!DATA_FILE) return;
-    try {
-        const data = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
-        let trackerFileNeedsUpdate = false;
-        for (const item of Array.isArray(data) ? data : []) {
-            const location = sanitizeLocation(item && item.location);
-            const trackerId = clampText(item && item.trackerId, 140);
-            if (!trackerId || !location) continue;
-            const savedState = { ...item };
-            const legacyMode = savedState.mode;
-            savedState.trackerMode = ['normal', 'lost'].includes(savedState.trackerMode)
-                ? savedState.trackerMode
-                : (['normal', 'lost'].includes(legacyMode) ? legacyMode : null);
-            delete savedState.mode;
-            delete savedState.reporterId;
-            const current = lastKnown.get(trackerId);
-            const incomingUpdatedAt = Number(savedState.updatedAt) || 0;
-            const currentUpdatedAt = Number(current && current.updatedAt) || 0;
-            if (current && incomingUpdatedAt < currentUpdatedAt) continue;
-            lastKnown.set(trackerId, {
-                ...savedState,
-                trackerId,
-                location,
-                live: false
-            });
-            const record = ownedTrackers.get(trackerId);
-            if (record && incomingUpdatedAt >= (Number(record.lastSeenAt) || 0)) {
-                record.lastLocation = location;
-                record.lastSeenAt = incomingUpdatedAt || Number(record.lastSeenAt) || null;
-                trackerFileNeedsUpdate = true;
-            }
+
+// TRUSTED_PROXY_IPS: comma-separated IP addresses and/or CIDR ranges, e.g. "172.16.0.0/12,192.168.1.101".
+function trustedProxySetting(raw) {
+    const list = new net.BlockList();
+    let count = 0;
+    for (const entry of String(raw || '').split(',').map(value => value.trim()).filter(Boolean)) {
+        const match = /^([^/]+)(?:\/(\d{1,3}))?$/.exec(entry);
+        const ip = match ? normalizedIp(match[1]) : '';
+        const family = net.isIP(ip);
+        const prefix = match && match[2] !== undefined ? Number(match[2]) : null;
+        if (!family || (prefix !== null && prefix > (family === 4 ? 32 : 128))) {
+            console.warn(`Ignoring invalid TRUSTED_PROXY_IPS entry: ${entry}`);
+            continue;
         }
-        if (trackerFileNeedsUpdate) scheduleTrackerSave();
-        console.log(`Loaded ${lastKnown.size} last known position(s) from ${DATA_FILE}`);
-    } catch (error) {
-        if (error.code !== 'ENOENT') console.warn(`Could not load ${DATA_FILE}: ${error.message}`);
+        const type = family === 4 ? 'ipv4' : 'ipv6';
+        if (prefix === null) list.addAddress(ip, type);
+        else list.addSubnet(ip, prefix, type);
+        count += 1;
     }
+    return { list, count };
 }
-function migrateLegacyPositionsToFirstUser(userId) {
-    let changed = false;
-    for (const [oldId, item] of [...lastKnown.entries()]) {
-        if (item.userId) continue;
-        const rawId = clampText(item.trackerName || item.trackerId || oldId, 100);
-        const deviceId = `legacy-${rawId.replace(/[^a-zA-Z0-9._-]/g, '-').slice(0, 80)}`;
-        const newId = scopedTrackerId(userId, deviceId);
-        lastKnown.delete(oldId);
-        lastKnown.set(newId, {
-            ...item,
-            trackerId: newId,
-            deviceId,
-            trackerName: item.trackerName || rawId,
-            userId,
-            live: false
-        });
-        ownedTrackers.set(newId, {
-            trackerId: newId,
-            deviceId,
-            userId,
-            name: clampText(item.trackerName || rawId, 48),
-            createdAt: item.updatedAt || now(),
-            updatedAt: now(),
-            legacy: true
-        });
-        changed = true;
+
+const untrustedProxyWarnings = new Set();
+
+function isTrustedProxy(request) {
+    if (TRUSTED_PROXY_HOPS < 1 || !TRUSTED_PROXIES.count) return false;
+    const remote = normalizedIp(request.socket.remoteAddress);
+    const family = net.isIP(remote);
+    return Boolean(family) && TRUSTED_PROXIES.list.check(remote, family === 4 ? 'ipv4' : 'ipv6');
+}
+
+function warnUntrustedProxy(request) {
+    if (TRUSTED_PROXY_HOPS < 1 || !request.headers['x-forwarded-for']) return;
+    const remote = normalizedIp(request.socket.remoteAddress);
+    if (untrustedProxyWarnings.has(remote) || untrustedProxyWarnings.size >= 20) return;
+    untrustedProxyWarnings.add(remote);
+    console.warn(`Ignoring X-Forwarded-* headers from untrusted address ${remote}. If this is your reverse proxy, add it to TRUSTED_PROXY_IPS.`);
+}
+
+function clientIp(request) {
+    const remote = normalizedIp(request.socket.remoteAddress) || 'unknown';
+    if (!isTrustedProxy(request)) {
+        warnUntrustedProxy(request);
+        return remote;
     }
-    if (changed) {
-        console.log(`Migrated legacy unowned position(s) to the first account (${userId}).`);
-        saveTrackers();
-        saveLastKnownNow();
+    const hops = forwardedValues(request.headers['x-forwarded-for']);
+    const candidate = hops.length >= TRUSTED_PROXY_HOPS ? normalizedIp(hops[hops.length - TRUSTED_PROXY_HOPS]) : '';
+    return net.isIP(candidate) ? candidate : remote;
+}
+
+function requestInfo(request) {
+    return { ip: clientIp(request), platform: platformFromUserAgent(request.headers['user-agent']) };
+}
+
+class JsonStore {
+    constructor(file, label, version, key, serialize) {
+        Object.assign(this, { file, label, version, key, serialize, dirty: false, timer: null });
     }
-}
-function lastKnownSnapshot(userId) {
-    return [...lastKnown.values()]
-        .filter(state => state.userId === userId)
-        .map(publicState);
-}
-function publicState(state) {
-    const { userId, reporterId, ...safe } = state;
-    return safe;
-}
-function removeStaleTrackers() {
-    const cutoff = now() - TRACKER_TTL_MS;
-    for (const [trackerId, state] of trackerStates) {
-        if (state.updatedAt >= cutoff) continue;
-        trackerStates.delete(trackerId);
-        broadcastTrackerRemoved(state.userId, trackerId, 'stale');
-    }
-}
-function stateSnapshot(userId) {
-    removeStaleTrackers();
-    const states = [];
-    for (const state of trackerStates.values()) {
-        if (state.userId === userId) states.push(publicState(state));
-    }
-    return states;
-}
-function broadcastTrackerRemoved(userId, trackerId, reason) {
-    const known = lastKnown.get(trackerId);
-    broadcastToUser(userId, {
-        type: 'trackerRemoved', trackerId,
-        lastKnown: known ? publicState(known) : null,
-        reason, at: now(),
-    });
-}
-function sanitizeReport(message, client) {
-    const rawDeviceId = clampText(message.deviceId || message.trackerId, MAX_DEVICE_ID_LENGTH);
-    if (!rawDeviceId) throw new Error('deviceId is required');
-    const record = findTrackerForUser(client.userId, rawDeviceId);
-    if (!record) throw new Error('This tracker is not registered to your account. Add it from the tracker menu first.');
-    const rssi = finiteNumber(message.rssi);
-    const txPower = finiteNumber(message.txPower);
-    const distanceM = finiteNumber(message.distanceM);
-    const location = sanitizeLocation(message.location);
-    const trackerMode = ['normal', 'lost'].includes(message.trackerMode) ? message.trackerMode : null;
-    const blePacketAt = finiteNumber(message.lastBlePacketAt);
-    return {
-        trackerId: record.trackerId,
-        deviceId: record.deviceId,
-        trackerName: record.name,
-        location,
-        rssi: rssi !== null && rssi >= -150 && rssi <= 0 ? rssi : null,
-        txPower: txPower !== null && txPower >= -100 && txPower <= 30 ? txPower : null,
-        distanceM: distanceM !== null && distanceM >= 0 && distanceM <= 100000 ? distanceM : null,
-        trackerMode,
-        live: true,
-        userId: client.userId,
-        reporterId: client.clientId,
-        updatedAt: now(),
-        lastBlePacketAt: blePacketAt !== null && blePacketAt > 0 && blePacketAt <= now() ? blePacketAt : now(),
-    };
-}
-function sendFrame(socket, opcode, payloadBuffer = Buffer.alloc(0)) {
-    if (socket.destroyed) return;
-    const payload = Buffer.isBuffer(payloadBuffer) ? payloadBuffer : Buffer.from(payloadBuffer);
-    let header;
-    if (payload.length < 126) {
-        header = Buffer.from([0x80 | opcode, payload.length]);
-    } else if (payload.length < 65536) {
-        header = Buffer.alloc(4);
-        header[0] = 0x80 | opcode;
-        header[1] = 126;
-        header.writeUInt16BE(payload.length, 2);
-    } else {
-        header = Buffer.alloc(10);
-        header[0] = 0x80 | opcode;
-        header[1] = 127;
-        header.writeBigUInt64BE(BigInt(payload.length), 2);
-    }
-    if (socket.writableLength > MAX_WS_BACKLOG_BYTES) { socket.destroy(); return; }
-    socket.write(Buffer.concat([header, payload]));
-}
-function sendJson(client, message) {
-    sendFrame(client.socket, 0x1, Buffer.from(JSON.stringify(message)));
-}
-function broadcastToUser(userId, message) {
-    const set = clientsByUser.get(userId);
-    if (!set) return;
-    const frame = Buffer.from(JSON.stringify(message));
-    for (const client of [...set]) {
-        try { sendFrame(client.socket, 0x1, frame); } catch (_) { destroyClient(client); }
-    }
-}
-function removeTrackerForClient(client, rawTrackerId) {
-    const record = findTrackerForUser(client.userId, rawTrackerId);
-    if (!record) return false;
-    const trackerId = record.trackerId;
-    const state = trackerStates.get(trackerId);
-    if (!state || state.userId !== client.userId || state.reporterId !== client.clientId) return false;
-    trackerStates.delete(trackerId);
-    client.trackerIds.delete(trackerId);
-    broadcastTrackerRemoved(client.userId, trackerId, 'reporter_disconnected');
-    return true;
-}
-function handleMessage(client, message) {
-    if (!message || typeof message !== 'object') return;
-    if (message.type === 'hello') {
-        sendJson(client, { type: 'helloAck', clientId: client.clientId, appVersion: APP_VERSION, serverTime: now() });
-        sendJson(client, {
-            type: 'snapshot',
-            trackers: stateSnapshot(client.userId),
-            lastKnown: lastKnownSnapshot(client.userId),
-            ownedTrackers: trackersForUser(client.userId),
-            devices: devicesForUser(client.userId),
-            serverTime: now(),
-        });
-        return;
-    }
-    if (message.type === 'deviceReport') {
-        try { reportDeviceLocation(client, message); }
-        catch (error) { sendJson(client, { type: 'error', message: error.message }); }
-        return;
-    }
-    if (message.type === 'deviceStop') {
-        stopDeviceReporting(client, message.deviceId || '');
-        return;
-    }
-    if (message.type === 'trackerReport') {
-        try {
-            const state = sanitizeReport(message, client);
-            const previous = trackerStates.get(state.trackerId) || lastKnown.get(state.trackerId);
-            if (!state.trackerMode && previous && previous.trackerMode) state.trackerMode = previous.trackerMode;
-            trackerStates.set(state.trackerId, state);
-            client.trackerIds.add(state.trackerId);
-            if (state.location) {
-                lastKnown.set(state.trackerId, { ...state, live: false });
-                const record = ownedTrackers.get(state.trackerId);
-                if (record) {
-                    record.lastLocation = state.location;
-                    record.lastSeenAt = state.updatedAt;
-                }
-                scheduleTrackerSave();
-                scheduleSave();
-            }
-            broadcastToUser(client.userId, { type: 'trackerState', state: publicState(state) });
-        } catch (error) {
-            sendJson(client, { type: 'error', message: error.message });
-        }
-        return;
-    }
-    if (message.type === 'trackerStop') {
-        const rawTrackerId = clampText(message.deviceId || message.trackerId, MAX_DEVICE_ID_LENGTH);
-        if (rawTrackerId) removeTrackerForClient(client, rawTrackerId);
-        return;
-    }
-    sendJson(client, { type: 'error', message: `Unknown message type: ${String(message.type || 'undefined')}` });
-}
-function closeClient(client, code) {
-    if (client.closing) return;
-    client.closing = true;
-    client.buffer = Buffer.alloc(0);
-    sendFrame(client.socket, 0x8, Buffer.from([code >> 8, code & 0xff]));
-    client.socket.end();
-}
-function dispatchTextFrame(client, payload) {
-    let message;
-    try { message = JSON.parse(payload.toString('utf8')); }
-    catch (_) { sendJson(client, { type: 'error', message: 'Invalid JSON message' }); return; }
-    try { handleMessage(client, message); }
-    catch (error) {
-        console.error(`Message handler failed: ${error.stack || error.message}`);
-        sendJson(client, { type: 'error', message: 'Internal error while handling the message' });
-    }
-}
-function processWebSocketBuffer(client) {
-    while (!client.closing && client.buffer.length >= 2) {
-        const first = client.buffer[0];
-        const second = client.buffer[1];
-        const fin = Boolean(first & 0x80);
-        const opcode = first & 0x0f;
-        const masked = Boolean(second & 0x80);
-        let payloadLength = second & 0x7f;
-        let offset = 2;
-        if (!masked) return closeClient(client, 1002);
-        if (opcode >= 0x8 && (!fin || payloadLength > 125)) return closeClient(client, 1002);
-        if (payloadLength === 126) {
-            if (client.buffer.length < offset + 2) return;
-            payloadLength = client.buffer.readUInt16BE(offset);
-            offset += 2;
-        } else if (payloadLength === 127) {
-            if (client.buffer.length < offset + 8) return;
-            const length64 = client.buffer.readBigUInt64BE(offset);
-            if (length64 > BigInt(MAX_MESSAGE_BYTES)) return closeClient(client, 1009);
-            payloadLength = Number(length64);
-            offset += 8;
-        }
-        if (payloadLength > MAX_MESSAGE_BYTES) return closeClient(client, 1009);
-        const frameLength = offset + 4 + payloadLength;
-        if (client.buffer.length < frameLength) return;
-        const mask = client.buffer.subarray(offset, offset + 4);
-        offset += 4;
-        const payload = Buffer.from(client.buffer.subarray(offset, offset + payloadLength));
-        client.buffer = client.buffer.subarray(frameLength);
-        client.alive = true;
-        for (let i = 0; i < payload.length; i++) payload[i] ^= mask[i & 3];
-        if (!fin && opcode < 8) return closeClient(client, 1003);
-        if (opcode === 0x1) {
-            dispatchTextFrame(client, payload);
-        } else if (opcode === 0x8) {
-            client.closing = true;
-            client.buffer = Buffer.alloc(0);
-            sendFrame(client.socket, 0x8, payload);
-            client.socket.end();
+
+    load(addItem) {
+        if (!this.file) {
+            console.warn(`No file configured for the ${this.label} registry; it will be memory-only.`);
             return;
-        } else if (opcode === 0x9) {
-            sendFrame(client.socket, 0xA, payload);
-        } else if (opcode !== 0xA) {
-            return closeClient(client, 1003);
+        }
+        let parsed;
+        try {
+            parsed = JSON.parse(fs.readFileSync(this.file, 'utf8'));
+        } catch (error) {
+            if (error.code === 'ENOENT') return;
+            throw new Error(`Could not load ${this.file}; startup stopped to protect existing data: ${error.message}`);
+        }
+        const items = parsed?.[this.key];
+        if (!Array.isArray(items)) throw new Error(`Invalid format in ${this.file}; startup stopped to protect existing data.`);
+        items.forEach((item, index) => {
+            if (!item || typeof item !== 'object' || !addItem(item)) {
+                throw new Error(`Invalid or duplicate ${this.label} record ${index + 1} in ${this.file}; startup stopped to protect existing data.`);
+            }
+        });
+        console.log(`Loaded ${items.length} ${this.label} record(s) from ${this.file}`);
+    }
+
+    save() {
+        if (!this.file) return;
+        const tmp = `${this.file}.${process.pid}.${crypto.randomBytes(6).toString('hex')}.tmp`;
+        try {
+            fs.mkdirSync(path.dirname(this.file), { recursive: true });
+            fs.writeFileSync(tmp, JSON.stringify({ version: this.version, [this.key]: this.serialize() }), { mode: 0o600, flag: 'wx' });
+            fs.renameSync(tmp, this.file);
+            this.cancel();
+            this.dirty = false;
+        } catch (error) {
+            try { fs.rmSync(tmp, { force: true }); } catch (_) { }
+            console.error(`Could not save ${this.file}: ${error.message}`);
+            throw httpError(503, `Could not save ${this.label} data. Check that the persistent data directory is writable.`);
+        }
+    }
+
+    commit(undo) {
+        try {
+            this.save();
+        } catch (error) {
+            undo();
+            throw error;
+        }
+    }
+
+    schedule() {
+        if (!this.file) return;
+        this.dirty = true;
+        if (this.timer || shuttingDown) return;
+        this.timer = setTimeout(() => {
+            this.timer = null;
+            if (!this.dirty || shuttingDown) return;
+            try { this.save(); } catch (_) { this.schedule(); }
+        }, SAVE_DELAY_MS);
+        this.timer.unref();
+    }
+
+    cancel() {
+        clearTimeout(this.timer);
+        this.timer = null;
+    }
+
+    flush() {
+        this.cancel();
+        if (!this.file || !this.dirty) return true;
+        try {
+            this.save();
+            return true;
+        } catch (_) {
+            return false;
         }
     }
 }
-function destroyClient(client) {
-    if (client.destroyed) return;
-    client.destroyed = true;
-    clients.delete(client);
-    const set = clientsByUser.get(client.userId);
-    if (set) { set.delete(client); if (!set.size) clientsByUser.delete(client.userId); }
-    for (const trackerId of client.trackerIds) {
-        const state = trackerStates.get(trackerId);
-        if (state && state.reporterId === client.clientId && state.userId === client.userId) {
-            trackerStates.delete(trackerId);
-            broadcastTrackerRemoved(client.userId, trackerId, 'reporter_disconnected');
+
+class Registry {
+    constructor(kind, { title, file, version, max, ttlMs, uniqueNames = false, fields, onReport }) {
+        Object.assign(this, { kind, title, max, ttlMs, uniqueNames, fields, onReport });
+        this.records = new Map();
+        this.presence = new Map();
+        this.seen = new Map();
+        this.store = new JsonStore(file, kind, version, `${kind}s`, () => [...this.records.values()].map(({ id, ...rest }) => ({ deviceId: id, ...rest })));
+    }
+
+    key(userId, id) {
+        return `${userId}:${id}`;
+    }
+
+    keyOf(record) {
+        return this.key(record.userId, record.id);
+    }
+
+    get(userId, id) {
+        return typeof id === 'string' && id ? this.records.get(this.key(userId, id)) || null : null;
+    }
+
+    require(user, id) {
+        const record = this.get(user.id, id);
+        if (!record) throw httpError(404, `${this.title} not found in this account.`);
+        return record;
+    }
+
+    forUser(userId) {
+        return [...this.records.values()].filter(record => record.userId === userId);
+    }
+
+    owner(id) {
+        for (const record of this.records.values()) if (record.id === id) return record.userId;
+        return null;
+    }
+
+    add(record) {
+        this.records.set(this.keyOf(record), record);
+    }
+
+    delete(record) {
+        this.records.delete(this.keyOf(record));
+    }
+
+    load() {
+        this.store.load(item => {
+            const id = text(item.deviceId, 100) || (this.uniqueNames ? normalizeName(item.name) : '');
+            if (!id || !validUserId(item.userId) || this.get(item.userId, id)) return false;
+            const created = timestamp(item.createdAt) || now();
+            this.add({
+                id,
+                userId: item.userId,
+                name: text(item.name, NAME_MAX_LENGTH) || this.title,
+                createdAt: created,
+                updatedAt: timestamp(item.updatedAt) || created,
+                lastSeenAt: timestamp(item.lastSeenAt),
+                lastLocation: sanitizeLocation(item.lastLocation),
+                ...this.fields(item),
+            });
+            return true;
+        });
+    }
+
+    isOnline(record) {
+        const reporters = this.presence.get(this.keyOf(record));
+        if (!reporters) return false;
+        const cutoff = now() - this.ttlMs;
+        for (const at of reporters.values()) if (at >= cutoff) return true;
+        return false;
+    }
+
+    view(record) {
+        const { userId, lastLocation, ...rest } = record;
+        return { kind: this.kind, ...rest, location: lastLocation, online: this.isOnline(record) };
+    }
+
+    views(userId) {
+        return this.forUser(userId).sort((a, b) => a.createdAt - b.createdAt).map(record => this.view(record));
+    }
+
+    publish(record) {
+        broadcast(record.userId, { type: 'upsert', item: this.view(record) });
+    }
+
+    assertNameFree(userId, name, except = null) {
+        if (!this.uniqueNames) return;
+        const wanted = normalizeName(name);
+        if (this.forUser(userId).some(record => record !== except && normalizeName(record.name) === wanted)) {
+            throw httpError(409, `Another ${this.kind} in this account already uses that name. If this is that ${this.kind}, choose it from the list instead.`);
         }
     }
-    client.trackerIds.clear();
-    stopDeviceReporting(client);
-    try { client.socket.destroy(); } catch (_) { }
-}
-function rejectUpgrade(socket, statusLine) {
-    try { socket.write(`HTTP/1.1 ${statusLine}\r\nConnection: close\r\nCache-Control: no-store\r\n\r\n`); } catch (_) { }
-    socket.destroy();
-}
-function handleUpgrade(request, socket, head) {
-    socket.on('error', () => { });
-    let pathname;
-    try { pathname = new URL(request.url, 'http://localhost').pathname; }
-    catch (_) { return rejectUpgrade(socket, '400 Bad Request'); }
-    const expectedWsPath = (WS_PATH || '/ws').replace(/\/+$/, '') || '/ws';
-    if (request.method !== 'GET' || (pathname !== expectedWsPath && pathname !== `${expectedWsPath}/`)) {
-        return rejectUpgrade(socket, '404 Not Found');
+
+    create(user, id, fields) {
+        if (this.forUser(user.id).length >= this.max) throw httpError(409, `This account can register up to ${this.max} ${this.kind}s.`);
+        this.assertNameFree(user.id, fields.name);
+        const created = now();
+        const record = { id, userId: user.id, createdAt: created, updatedAt: created, lastSeenAt: null, lastLocation: null, ...fields };
+        this.add(record);
+        this.store.commit(() => this.delete(record));
+        this.publish(record);
+        return this.view(record);
     }
-    const user = getSessionUser(request);
-    if (!user) return rejectUpgrade(socket, '401 Unauthorized');
-    const upgrade = String(request.headers.upgrade || '').toLowerCase();
-    const connection = String(request.headers.connection || '').toLowerCase();
-    const key = request.headers['sec-websocket-key'];
-    const version = String(request.headers['sec-websocket-version'] || '');
-    if (upgrade !== 'websocket' || !connection.includes('upgrade') || !key || version !== '13') {
-        return rejectUpgrade(socket, '400 Bad Request');
+
+    rename(user, body) {
+        const record = this.require(user, body.id);
+        const name = readName(body.name);
+        this.assertNameFree(user.id, name, record);
+        const previous = { name: record.name, updatedAt: record.updatedAt };
+        Object.assign(record, { name, updatedAt: now() });
+        this.store.commit(() => Object.assign(record, previous));
+        this.publish(record);
+        return this.view(record);
     }
-    const accept = crypto.createHash('sha1').update(key + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest('base64');
-    socket.write('HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n' + `Sec-WebSocket-Accept: ${accept}\r\n\r\n`);
-    socket.setNoDelay(true);
-    const cookies = parseCookies(request.headers.cookie);
-    const client = {
-        socket,
-        clientId: crypto.randomUUID(),
-        sessionKey: hashSession(cookies[SESSION_COOKIE]),
-        userId: user.id,
-        buffer: Buffer.alloc(0),
-        trackerIds: new Set(),
-        deviceKey: null,
-        ip: getClientIp(request),
-        platform: platformFromUserAgent(request.headers['user-agent']),
-        destroyed: false,
-        closing: false,
-        alive: true,
-    };
-    clients.add(client);
-    if (!clientsByUser.has(user.id)) clientsByUser.set(user.id, new Set());
-    clientsByUser.get(user.id).add(client);
-    socket.on('data', chunk => {
-        if (client.destroyed || client.closing) return;
-        client.buffer = client.buffer.length ? Buffer.concat([client.buffer, chunk]) : chunk;
-        processWebSocketBuffer(client);
+
+    remove(user, body) {
+        const record = this.require(user, body.id);
+        this.delete(record);
+        this.store.commit(() => this.add(record));
+        this.forget(record);
+    }
+
+    forget(record) {
+        const key = this.keyOf(record);
+        this.presence.delete(key);
+        this.seen.delete(key);
+        for (const client of clientsByUser.get(record.userId) || []) if (client.reporting[this.kind] === key) client.reporting[this.kind] = null;
+        broadcast(record.userId, { type: 'remove', kind: this.kind, id: record.id });
+    }
+
+    markSeen(record, info) {
+        this.seen.set(this.keyOf(record), { ...info, at: now() });
+    }
+
+    report(client, message) {
+        const record = this.get(client.userId, message.id);
+        if (!record) throw new Error(`This ${this.kind} is not registered to your account. Add it from the menu first.`);
+        const key = this.keyOf(record);
+        const previous = client.reporting[this.kind];
+        if (previous && previous !== key) this.release(previous, client.clientId);
+        client.reporting[this.kind] = key;
+        const location = sanitizeLocation(message.location);
+        if (location) record.lastLocation = location;
+        record.lastSeenAt = now();
+        this.onReport(record, message, client);
+        let reporters = this.presence.get(key);
+        if (!reporters) this.presence.set(key, reporters = new Map());
+        reporters.set(client.clientId, record.lastSeenAt);
+        this.store.schedule();
+        this.publish(record);
+    }
+
+    stop(client, id = '') {
+        const key = id ? this.key(client.userId, id) : client.reporting[this.kind];
+        if (!key) return;
+        if (client.reporting[this.kind] === key) client.reporting[this.kind] = null;
+        this.release(key, client.clientId);
+    }
+
+    release(key, clientId) {
+        const reporters = this.presence.get(key);
+        if (!reporters?.delete(clientId)) return;
+        if (!reporters.size) this.presence.delete(key);
+        const record = this.records.get(key);
+        if (record && !this.isOnline(record)) this.publish(record);
+    }
+
+    sweep() {
+        const cutoff = now() - this.ttlMs;
+        for (const [key, reporters] of this.presence) {
+            for (const [clientId, at] of reporters) if (at < cutoff) reporters.delete(clientId);
+            if (reporters.size) continue;
+            this.presence.delete(key);
+            const record = this.records.get(key);
+            if (record) this.publish(record);
+        }
+        for (const [key, seen] of this.seen) if (now() - seen.at > SUGGESTION_TTL_MS) this.seen.delete(key);
+    }
+}
+
+const authStore = new JsonStore(dataFile('AUTH_FILE', 'auth.json'), 'account', 1, 'users', () => [...users.values()]);
+
+const trackers = new Registry('tracker', {
+    title: 'Tracker',
+    file: dataFile('TRACKERS_FILE', 'trackers.json'),
+    version: 4,
+    max: 100,
+    ttlMs: TRACKER_TTL_MS,
+    fields: item => trackerFields(item),
+    onReport(record, message) {
+        Object.assign(record, trackerFields(message, record));
+        if (!record.lastBlePacketAt || record.lastBlePacketAt > record.lastSeenAt) record.lastBlePacketAt = record.lastSeenAt;
+    },
+});
+
+const devices = new Registry('device', {
+    title: 'Device',
+    file: dataFile('DEVICES_FILE', 'devices.json'),
+    version: 3,
+    max: 30,
+    ttlMs: DEVICE_TTL_MS,
+    uniqueNames: true,
+    fields: deviceFields,
+    onReport(record, message, client) {
+        if (client.platform) record.platform = client.platform;
+        this.markSeen(record, { ip: client.ip, platform: client.platform });
+    },
+});
+
+const registries = new Map([[trackers.kind, trackers], [devices.kind, devices]]);
+
+function runtimeConfig() {
+    return { trackerTtlMs: TRACKER_TTL_MS, deviceTtlMs: DEVICE_TTL_MS, wsPath: WS_PATH };
+}
+
+function snapshot(userId) {
+    return { items: [...trackers.views(userId), ...devices.views(userId)], ...runtimeConfig(), serverTime: now() };
+}
+
+function trackerId(value) {
+    const id = typeof value === 'string' ? value.trim() : '';
+    if (!HARDWARE_ID_RE.test(id)) throw httpError(400, 'Invalid tracker hardware ID. Update the tracker firmware and try again.');
+    return id;
+}
+
+function assertTrackerAvailable(user, id) {
+    const owner = trackers.owner(id);
+    if (owner && owner !== user.id) throw httpError(409, 'This tracker is already registered to another account.');
+}
+
+function addTracker(user, body) {
+    const id = trackerId(body.id);
+    assertTrackerAvailable(user, id);
+    const existing = trackers.get(user.id, id);
+    if (existing) return trackers.view(existing);
+    return trackers.create(user, id, { name: readName(body.name, 'OpenTag tracker'), ...trackerFields({}) });
+}
+
+function rebindTracker(user, body) {
+    const record = trackers.require(user, body.id);
+    const newId = trackerId(body.newId);
+    if (TEMPORARY_ID_RE.test(newId)) throw httpError(400, 'A permanent tracker hardware ID is required. Update the tracker firmware and try again.');
+    if (newId === record.id) return trackers.view(record);
+    if (!TEMPORARY_ID_RE.test(record.id)) throw httpError(409, 'This tracker already has a permanent hardware ID and cannot be rebound automatically.');
+    assertTrackerAvailable(user, newId);
+    const existing = trackers.get(user.id, newId);
+    const merged = existing ? { ...existing } : { ...record, id: newId, updatedAt: now() };
+    if (existing && (record.lastSeenAt || 0) > (existing.lastSeenAt || 0)) {
+        Object.assign(merged, { lastLocation: record.lastLocation, lastSeenAt: record.lastSeenAt });
+    }
+    trackers.delete(record);
+    trackers.add(merged);
+    trackers.store.commit(() => {
+        trackers.delete(merged);
+        trackers.add(record);
+        if (existing) trackers.add(existing);
     });
-    socket.on('close', () => destroyClient(client));
-    socket.on('end', () => destroyClient(client));
-    socket.on('error', () => destroyClient(client));
-    if (head && head.length) { client.buffer = Buffer.from(head); processWebSocketBuffer(client); }
+    trackers.forget(record);
+    trackers.publish(merged);
+    return trackers.view(merged);
 }
-function readCredentials(body) {
-    const username = typeof body.username === 'string' ? body.username.trim().toLowerCase() : '';
-    const password = typeof body.password === 'string' ? body.password : '';
-    return { username, password };
+
+function registerDevice(user, body, request) {
+    let id;
+    do id = `dev-${crypto.randomBytes(9).toString('base64url')}`; while (devices.get(user.id, id));
+    const info = requestInfo(request);
+    const view = devices.create(user, id, { name: readName(body.name), type: deviceFields(body).type, platform: info.platform });
+    devices.markSeen(devices.get(user.id, id), info);
+    return view;
 }
-async function registerAccount(request, response) {
-    if (!REGISTRATION_ENABLED) return jsonResponse(response, 403, { error: 'Registration is currently disabled.' });
-    if (!rateLimitAuth(request, response, 'register')) return;
-    const body = await readJsonBody(request);
-    const { username, password } = readCredentials(body);
-    if (!USERNAME_RE.test(username)) {
-        return jsonResponse(response, 400, { error: 'Username must be 3–32 characters and contain only letters, numbers, dot, underscore, or hyphen.' });
-    }
-    if (password.length < PASSWORD_MIN_LENGTH || password.length > PASSWORD_MAX_LENGTH) {
-        return jsonResponse(response, 400, { error: `Password must be between ${PASSWORD_MIN_LENGTH} and ${PASSWORD_MAX_LENGTH} characters.` });
-    }
-    if (usersByName.has(username)) return jsonResponse(response, 409, { error: 'That username is already taken.' });
-    const salt = crypto.randomBytes(16);
-    const hash = await scryptAsync(password, salt, SCRYPT_KEY_LENGTH);
-    if (usersByName.has(username)) return jsonResponse(response, 409, { error: 'That username is already taken.' });
-    const isFirstUser = users.size === 0;
-    const user = {
-        id: crypto.randomUUID(),
-        username,
-        passwordSalt: salt.toString('base64url'),
-        passwordHash: Buffer.from(hash).toString('base64url'),
-        createdAt: now(),
-    };
+
+function linkDevice(user, body, request) {
+    const record = devices.require(user, body.id);
+    devices.markSeen(record, requestInfo(request));
+    return devices.view(record);
+}
+
+function suggestDevices(user, request) {
+    const { ip, platform } = requestInfo(request);
+    const ids = devices.forUser(user.id)
+        .map(record => ({ record, seen: devices.seen.get(devices.keyOf(record)) }))
+        .filter(({ record, seen }) => platform && seen && seen.ip === ip && (seen.platform || record.platform) === platform)
+        .sort((a, b) => b.seen.at - a.seen.at)
+        .map(({ record }) => record.id);
+    return { platform, ids };
+}
+
+function publicUser(user) {
+    return { id: user.id, username: user.username, createdAt: user.createdAt };
+}
+
+function addUser(user) {
     users.set(user.id, user);
-    usersByName.set(username, user);
-    try {
-        saveUsers();
-    } catch (error) {
+    usersByName.set(user.username, user);
+}
+
+function loadUsers() {
+    authStore.load(item => {
+        const username = typeof item.username === 'string' ? item.username.trim().toLowerCase() : '';
+        const salt = typeof item.passwordSalt === 'string' ? Buffer.from(item.passwordSalt, 'base64url') : Buffer.alloc(0);
+        const hash = typeof item.passwordHash === 'string' ? Buffer.from(item.passwordHash, 'base64url') : Buffer.alloc(0);
+        if (!validUserId(item.id) || !USERNAME_RE.test(username) || salt.length !== 16 || hash.length !== SCRYPT_KEY_LENGTH) return false;
+        if (users.has(item.id) || usersByName.has(username)) return false;
+        addUser({ ...item, username, createdAt: timestamp(item.createdAt) || now() });
+        return true;
+    });
+}
+
+function hashToken(token) {
+    return crypto.createHash('sha256').update(token).digest('hex');
+}
+
+function readCookie(header, name) {
+    for (const part of String(header || '').split(';')) {
+        const index = part.indexOf('=');
+        if (index < 1 || part.slice(0, index).trim() !== name) continue;
+        const value = part.slice(index + 1).trim();
+        try { return decodeURIComponent(value); } catch (_) { return value; }
+    }
+    return '';
+}
+
+function getSession(request) {
+    const token = readCookie(request.headers.cookie, SESSION_COOKIE);
+    if (!token) return null;
+    const key = hashToken(token);
+    const session = sessions.get(key);
+    const user = session && session.expiresAt > now() ? users.get(session.userId) : null;
+    if (!user) {
+        sessions.delete(key);
+        return null;
+    }
+    return { key, user };
+}
+
+function isSecureRequest(request) {
+    if (request.socket.encrypted) return true;
+    if (!isTrustedProxy(request)) return false;
+    const protocols = forwardedValues(request.headers['x-forwarded-proto']);
+    // Proxies such as Nginx Proxy Manager overwrite X-Forwarded-Proto with a single value; use the value set by the nearest trusted proxy.
+    return (protocols[protocols.length - 1] || '').toLowerCase() === 'https';
+}
+
+function setSessionCookie(request, response, token, maxAgeSeconds) {
+    const parts = [`${SESSION_COOKIE}=${encodeURIComponent(token)}`, 'Path=/', 'HttpOnly', 'SameSite=Lax', `Max-Age=${maxAgeSeconds}`];
+    if (isSecureRequest(request)) parts.push('Secure');
+    response.setHeader('Set-Cookie', parts.join('; '));
+}
+
+function startSession(request, response, user) {
+    const token = crypto.randomBytes(32).toString('base64url');
+    sessions.set(hashToken(token), { userId: user.id, expiresAt: now() + SESSION_TTL_MS });
+    setSessionCookie(request, response, token, SESSION_TTL_MS / 1000);
+    return { ok: true, user: publicUser(user) };
+}
+
+function rateLimit(request, route) {
+    const key = `${route}:${clientIp(request)}`;
+    const cutoff = now() - RATE_WINDOW_MS;
+    const attempts = (authAttempts.get(key) || []).filter(at => at > cutoff);
+    authAttempts.set(key, attempts);
+    if (attempts.length >= RATE_LIMIT) {
+        throw httpError(429, 'Too many attempts. Please wait 15 minutes and try again.', { 'Retry-After': String(RATE_WINDOW_MS / 1000) });
+    }
+    attempts.push(now());
+}
+
+function credentials(body) {
+    return {
+        username: typeof body.username === 'string' ? body.username.trim().toLowerCase() : '',
+        password: typeof body.password === 'string' ? body.password : '',
+    };
+}
+
+async function readJsonBody(request) {
+    const contentType = String(request.headers['content-type'] || '').split(';', 1)[0].trim().toLowerCase();
+    if (contentType !== 'application/json') throw httpError(415, 'Content-Type must be application/json');
+    if (Number(request.headers['content-length'] || 0) > MAX_BODY_BYTES) throw httpError(413, 'Request body is too large');
+    const chunks = [];
+    let total = 0;
+    for await (const chunk of request) {
+        total += chunk.length;
+        if (total > MAX_BODY_BYTES) throw httpError(413, 'Request body is too large');
+        chunks.push(chunk);
+    }
+    let body;
+    try { body = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch (_) { }
+    if (!body || typeof body !== 'object' || Array.isArray(body)) throw httpError(400, 'Invalid JSON body');
+    return body;
+}
+
+function sendJson(response, statusCode, data, headers = {}) {
+    response.writeHead(statusCode, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', ...SECURITY_HEADERS, ...headers });
+    response.end(JSON.stringify(data));
+}
+
+const routes = new Map();
+function route(method, pathname, handler, requiresAuth = true) {
+    routes.set(`${method} ${pathname}`, { handler, requiresAuth });
+}
+
+route('GET', '/api/health', () => [200, { ok: true, service: 'opentag-backend', ...runtimeConfig(), time: now() }], false);
+
+route('GET', '/api/auth/me', ({ session }) => [200, session ? { authenticated: true, user: publicUser(session.user) } : { authenticated: false }], false);
+
+route('POST', '/api/auth/register', async ({ request, response, json }) => {
+    if (!REGISTRATION_ENABLED) throw httpError(403, 'Registration is currently disabled.');
+    rateLimit(request, 'register');
+    const { username, password } = credentials(await json());
+    if (!USERNAME_RE.test(username)) throw httpError(400, 'Username must be 3–32 characters and contain only letters, numbers, dot, underscore, or hyphen.');
+    if (password.length < PASSWORD_MIN_LENGTH || password.length > PASSWORD_MAX_LENGTH) {
+        throw httpError(400, `Password must be between ${PASSWORD_MIN_LENGTH} and ${PASSWORD_MAX_LENGTH} characters.`);
+    }
+    if (usersByName.has(username)) throw httpError(409, 'That username is already taken.');
+    const salt = crypto.randomBytes(16);
+    const hash = await scrypt(password, salt, SCRYPT_KEY_LENGTH);
+    if (usersByName.has(username)) throw httpError(409, 'That username is already taken.');
+    const user = { id: crypto.randomUUID(), username, passwordSalt: salt.toString('base64url'), passwordHash: hash.toString('base64url'), createdAt: now() };
+    addUser(user);
+    authStore.commit(() => {
         users.delete(user.id);
         usersByName.delete(username);
-        throw error;
-    }
-    if (isFirstUser) migrateLegacyPositionsToFirstUser(user.id);
-    const token = createSession(user);
-    setSessionCookie(request, response, token);
-    jsonResponse(response, 201, { ok: true, user: safeUser(user) });
-}
-async function loginAccount(request, response) {
-    if (!rateLimitAuth(request, response, 'login')) return;
-    const body = await readJsonBody(request);
-    const { username, password } = readCredentials(body);
+    });
+    return [201, startSession(request, response, user)];
+}, false);
+
+route('POST', '/api/auth/login', async ({ request, response, json }) => {
+    rateLimit(request, 'login');
+    const { username, password } = credentials(await json());
     const user = usersByName.get(username);
     let valid = false;
     if (password.length <= PASSWORD_MAX_LENGTH) {
-        try {
-            const salt = user ? Buffer.from(user.passwordSalt, 'base64url') : DUMMY_SALT;
-            const candidate = Buffer.from(await scryptAsync(password, salt, SCRYPT_KEY_LENGTH));
-            if (user) {
-                const saved = Buffer.from(user.passwordHash, 'base64url');
-                valid = candidate.length === saved.length && crypto.timingSafeEqual(candidate, saved);
-            }
-        } catch (_) { valid = false; }
+        const candidate = await scrypt(password, user ? Buffer.from(user.passwordSalt, 'base64url') : DUMMY_SALT, SCRYPT_KEY_LENGTH);
+        valid = Boolean(user) && crypto.timingSafeEqual(candidate, Buffer.from(user.passwordHash, 'base64url'));
     }
-    if (!valid) return jsonResponse(response, 401, { error: 'Incorrect username or password.' });
-    const token = createSession(user);
-    setSessionCookie(request, response, token);
-    jsonResponse(response, 200, { ok: true, user: safeUser(user) });
-}
-function logoutAccount(request, response) {
-    const cookies = parseCookies(request.headers.cookie);
-    const token = cookies[SESSION_COOKIE];
-    const sessionKey = token ? hashSession(token) : '';
-    if (sessionKey) sessions.delete(sessionKey);
-    if (sessionKey) {
-        for (const client of [...clients]) {
-            if (client.sessionKey === sessionKey) destroyClient(client);
-        }
+    if (!valid) throw httpError(401, 'Incorrect username or password.');
+    return [200, startSession(request, response, user)];
+}, false);
+
+route('POST', '/api/auth/logout', ({ request, response, session }) => {
+    if (session) {
+        sessions.delete(session.key);
+        for (const client of [...clients]) if (client.sessionKey === session.key) destroyClient(client);
     }
-    clearSessionCookie(request, response);
-    jsonResponse(response, 200, {
-        ok: true
+    setSessionCookie(request, response, '', 0);
+    return [200, { ok: true }];
+}, false);
+
+route('GET', '/api/state', ({ user }) => [200, snapshot(user.id)]);
+route('POST', '/api/trackers/add', async ({ user, json }) => [201, { ok: true, item: addTracker(user, await json()) }]);
+route('POST', '/api/trackers/rebind', async ({ user, json }) => [200, { ok: true, item: rebindTracker(user, await json()) }]);
+route('POST', '/api/devices/register', async ({ user, json, request }) => [201, { ok: true, item: registerDevice(user, await json(), request) }]);
+route('POST', '/api/devices/link', async ({ user, json, request }) => [200, { ok: true, item: linkDevice(user, await json(), request) }]);
+route('GET', '/api/devices/suggest', ({ user, request }) => [200, suggestDevices(user, request)]);
+for (const registry of registries.values()) {
+    route('POST', `/api/${registry.kind}s/rename`, async ({ user, json }) => [200, { ok: true, item: registry.rename(user, await json()) }]);
+    route('POST', `/api/${registry.kind}s/remove`, async ({ user, json }) => {
+        registry.remove(user, await json());
+        return [200, { ok: true }];
     });
 }
 
@@ -1283,152 +765,279 @@ async function serveStatic(request, response, pathname) {
     if (relative.includes('\0')) return false;
     if (relative.endsWith('/')) relative += 'index.html';
     const file = path.resolve(STATIC_DIR, `.${relative}`);
-    if (file !== STATIC_DIR && !file.startsWith(STATIC_DIR + path.sep)) return false;
+    if (!file.startsWith(STATIC_DIR + path.sep)) return false;
     const type = STATIC_MIME[path.extname(file).toLowerCase()];
     if (!type) return false;
-    try {
-        const data = await fs.promises.readFile(file);
-        response.writeHead(200, { 'Content-Type': type, 'Content-Length': data.length, 'Cache-Control': 'no-cache', 'X-Content-Type-Options': 'nosniff' });
-        response.end(request.method === 'HEAD' ? undefined : data);
-        return true;
-    } catch (_) { return false; }
+    let data;
+    try { data = await fs.promises.readFile(file); } catch (_) { return false; }
+    response.writeHead(200, { 'Content-Type': type, 'Content-Length': data.length, 'Cache-Control': 'no-cache', 'Content-Security-Policy': CSP, ...SECURITY_HEADERS });
+    response.end(request.method === 'HEAD' ? undefined : data);
+    return true;
 }
 
 const server = http.createServer(async (request, response) => {
     let pathname;
-    try { pathname = new URL(request.url, 'http://localhost').pathname; }
-    catch (_) { return jsonResponse(response, 400, { error: 'Bad request.' }); }
+    try { pathname = new URL(request.url, 'http://localhost').pathname; } catch (_) { return sendJson(response, 400, { error: 'Bad request.' }); }
     try {
-        if (request.method === 'GET' && pathname === '/api/health') {
-            return jsonResponse(response, 200, { ok: true, service: 'opentag-backend', version: APP_VERSION, time: now() });
-        }
-        if (request.method === 'GET' && pathname === '/api/auth/me') {
-            const user = getSessionUser(request);
-            return jsonResponse(response, 200, user ? { authenticated: true, user: safeUser(user) } : { authenticated: false });
-        }
-        if (request.method === 'POST' && pathname === '/api/auth/register') return await registerAccount(request, response);
-        if (request.method === 'POST' && pathname === '/api/auth/login') return await loginAccount(request, response);
-        if (request.method === 'POST' && pathname === '/api/auth/logout') return logoutAccount(request, response);
-
-        if (pathname.startsWith('/api/devices')) {
-            const user = getSessionUser(request);
-            if (!user) return jsonResponse(response, 401, { error: 'Authentication required.' });
-            if (request.method === 'GET' && pathname === '/api/devices') {
-                return jsonResponse(response, 200, { devices: devicesForUser(user.id), serverTime: now() });
-            }
-            if (request.method === 'POST' && pathname === '/api/devices/register') {
-                return jsonResponse(response, 201, { ok: true, device: registerDevice(user, await readJsonBody(request), request) });
-            }
-            if (request.method === 'POST' && pathname === '/api/devices/link') {
-                return jsonResponse(response, 200, { ok: true, device: linkDevice(user, await readJsonBody(request), request) });
-            }
-            if (request.method === 'GET' && pathname === '/api/devices/suggest') {
-                return jsonResponse(response, 200, suggestDevices(user, request));
-            }
-            if (request.method === 'POST' && pathname === '/api/devices/rename') {
-                return jsonResponse(response, 200, { ok: true, device: renameDevice(user, await readJsonBody(request)) });
-            }
-            if (request.method === 'POST' && pathname === '/api/devices/remove') {
-                deleteDevice(user, await readJsonBody(request));
-                return jsonResponse(response, 200, { ok: true });
-            }
-            return jsonResponse(response, 404, { error: 'Not found' });
-        }
-
-        if (pathname.startsWith('/api/trackers')) {
-            const user = getSessionUser(request);
-            if (!user) return jsonResponse(response, 401, { error: 'Authentication required.' });
-            if (request.method === 'GET' && pathname === '/api/trackers') {
-                return jsonResponse(response, 200, { trackers: trackersForUser(user.id), serverTime: now() });
-            }
-            if (request.method === 'POST' && pathname === '/api/trackers/add') {
-                return jsonResponse(response, 201, { ok: true, tracker: registerTracker(user, await readJsonBody(request)) });
-            }
-            if (request.method === 'POST' && pathname === '/api/trackers/rebind') {
-                return jsonResponse(response, 200, { ok: true, tracker: rebindTracker(user, await readJsonBody(request)) });
-            }
-            if (request.method === 'POST' && pathname === '/api/trackers/rename') {
-                return jsonResponse(response, 200, { ok: true, tracker: renameTracker(user, await readJsonBody(request)) });
-            }
-            if (request.method === 'POST' && pathname === '/api/trackers/remove') {
-                deleteTracker(user, await readJsonBody(request));
-                return jsonResponse(response, 200, { ok: true });
-            }
-            return jsonResponse(response, 404, { error: 'Not found' });
-        }
-
-        if (request.method === 'GET' && pathname === '/api/state') {
-            const user = getSessionUser(request);
-            if (!user) return jsonResponse(response, 401, { error: 'Authentication required.' });
-            const body = {
-                trackers: stateSnapshot(user.id),
-                lastKnown: lastKnownSnapshot(user.id),
-                ownedTrackers: trackersForUser(user.id),
-                devices: devicesForUser(user.id),
-                serverTime: now(),
-            };
-            return jsonResponse(response, 200, body, { 'Cache-Control': 'no-store, no-cache, must-revalidate', Pragma: 'no-cache', Expires: '0' });
+        const entry = routes.get(`${request.method} ${pathname}`);
+        if (entry) {
+            const session = getSession(request);
+            if (entry.requiresAuth && !session) throw httpError(401, 'Authentication required.');
+            const [statusCode, data] = await entry.handler({ request, response, session, user: session?.user, json: () => readJsonBody(request) });
+            return sendJson(response, statusCode, data);
         }
         if (!pathname.startsWith('/api/') && await serveStatic(request, response, pathname)) return;
-        return jsonResponse(response, 404, { error: 'Not found' });
+        throw httpError(404, 'Not found');
     } catch (error) {
         const statusCode = Number.isInteger(error.statusCode) ? error.statusCode : 500;
-        if (statusCode >= 500) console.error(`Request failed (${request.method} ${pathname}): ${error.message}`);
+        if (statusCode >= 500) console.error(`Request failed (${request.method} ${pathname}): ${error.stack || error.message}`);
         if (response.headersSent) return response.destroy();
-        return jsonResponse(response, statusCode, { error: statusCode >= 500 ? 'Internal server error.' : error.message });
+        sendJson(response, statusCode, { error: error.expose ? error.message : 'Internal server error.' }, error.headers);
     }
 });
-server.on('upgrade', handleUpgrade);
+server.requestTimeout = 30000;
+server.headersTimeout = 10000;
+server.keepAliveTimeout = 5000;
+server.maxRequestsPerSocket = 1000;
 
-setInterval(removeStaleTrackers, 5000).unref();
-setInterval(removeStaleDevices, 5000).unref();
+function broadcast(userId, message) {
+    const set = clientsByUser.get(userId);
+    if (!set?.size) return;
+    const payload = Buffer.from(JSON.stringify(message));
+    for (const client of [...set]) sendFrame(client, 0x1, payload);
+}
+
+function send(client, message) {
+    sendFrame(client, 0x1, Buffer.from(JSON.stringify(message)));
+}
+
+function sendFrame(client, opcode, payload = Buffer.alloc(0)) {
+    const { socket } = client;
+    if (socket.destroyed) return;
+    if (socket.writableLength > MAX_WS_BACKLOG_BYTES) return destroyClient(client);
+    const length = payload.length;
+    const header = Buffer.alloc(length < 126 ? 2 : length < 65536 ? 4 : 10);
+    header[0] = 0x80 | opcode;
+    if (length < 126) header[1] = length;
+    else if (length < 65536) {
+        header[1] = 126;
+        header.writeUInt16BE(length, 2);
+    } else {
+        header[1] = 127;
+        header.writeBigUInt64BE(BigInt(length), 2);
+    }
+    socket.write(Buffer.concat([header, payload]));
+}
+
+function closeClient(client, code) {
+    if (client.closing) return;
+    client.closing = true;
+    client.buffer = Buffer.alloc(0);
+    sendFrame(client, 0x8, Buffer.from([code >> 8, code & 0xff]));
+    client.socket.end();
+}
+
+function destroyClient(client) {
+    if (client.destroyed) return;
+    client.destroyed = true;
+    clients.delete(client);
+    const set = clientsByUser.get(client.userId);
+    if (set) {
+        set.delete(client);
+        if (!set.size) clientsByUser.delete(client.userId);
+    }
+    for (const registry of registries.values()) registry.stop(client);
+    client.socket.destroy();
+}
+
+function handleMessage(client, message) {
+    const registry = registries.get(message?.kind);
+    if (message?.type === 'hello') return send(client, { type: 'snapshot', ...snapshot(client.userId) });
+    if (registry && message.type === 'report') {
+        try { registry.report(client, message); } catch (error) { send(client, { type: 'error', message: error.message }); }
+        return;
+    }
+    if (registry && message.type === 'stop') return registry.stop(client, typeof message.id === 'string' ? message.id : '');
+    send(client, { type: 'error', message: `Unsupported message: ${String(message?.type)}` });
+}
+
+function handleText(client, payload) {
+    let message;
+    try { message = JSON.parse(utf8.decode(payload)); } catch (error) {
+        if (error instanceof TypeError) return closeClient(client, 1007);
+        return send(client, { type: 'error', message: 'Invalid JSON message' });
+    }
+    try {
+        handleMessage(client, message);
+    } catch (error) {
+        console.error(`Message handler failed: ${error.stack || error.message}`);
+        send(client, { type: 'error', message: 'Internal error while handling the message' });
+    }
+}
+
+function processFrames(client) {
+    while (!client.closing && client.buffer.length >= 2) {
+        const buffer = client.buffer;
+        const fin = (buffer[0] & 0x80) !== 0;
+        const opcode = buffer[0] & 0x0f;
+        let length = buffer[1] & 0x7f;
+        let offset = 2;
+        if (buffer[0] & 0x70 || !(buffer[1] & 0x80) || ![0x1, 0x2, 0x8, 0x9, 0xa].includes(opcode)) return closeClient(client, 1002);
+        if (opcode >= 0x8 && (!fin || length > 125)) return closeClient(client, 1002);
+        if (!fin) return closeClient(client, 1003);
+        if (length === 126) {
+            if (buffer.length < 4) return;
+            length = buffer.readUInt16BE(2);
+            if (length < 126) return closeClient(client, 1002);
+            offset = 4;
+        } else if (length === 127) {
+            if (buffer.length < 10) return;
+            const length64 = buffer.readBigUInt64BE(2);
+            if (length64 < 65536n) return closeClient(client, 1002);
+            if (length64 > BigInt(MAX_MESSAGE_BYTES)) return closeClient(client, 1009);
+            length = Number(length64);
+            offset = 10;
+        }
+        if (length > MAX_MESSAGE_BYTES) return closeClient(client, 1009);
+        const end = offset + 4 + length;
+        if (buffer.length < end) return;
+        const mask = buffer.subarray(offset, offset + 4);
+        const payload = Buffer.from(buffer.subarray(offset + 4, end));
+        for (let i = 0; i < payload.length; i++) payload[i] ^= mask[i & 3];
+        client.buffer = buffer.subarray(end);
+        client.alive = true;
+        if (opcode === 0x1) handleText(client, payload);
+        else if (opcode === 0x2) return closeClient(client, 1003);
+        else if (opcode === 0x9) sendFrame(client, 0xa, payload);
+        else if (opcode === 0x8) {
+            if (payload.length === 1) return closeClient(client, 1002);
+            if (payload.length >= 2) {
+                const code = payload.readUInt16BE(0);
+                if (!WS_CLOSE_CODES.has(code) && (code < 3000 || code > 4999)) return closeClient(client, 1002);
+                try { utf8.decode(payload.subarray(2)); } catch (_) { return closeClient(client, 1007); }
+            }
+            client.closing = true;
+            client.buffer = Buffer.alloc(0);
+            sendFrame(client, 0x8, payload);
+            return client.socket.end();
+        }
+    }
+}
+
+function rejectUpgrade(socket, status) {
+    try { socket.write(`HTTP/1.1 ${status}\r\nConnection: close\r\nCache-Control: no-store\r\n\r\n`); } catch (_) { }
+    socket.destroy();
+}
+
+function originAllowed(request) {
+    const origin = request.headers.origin;
+    if (!origin) return true;
+    try {
+        const parsed = new URL(origin);
+        return ['http:', 'https:'].includes(parsed.protocol) && parsed.host.toLowerCase() === String(request.headers.host || '').toLowerCase();
+    } catch (_) {
+        return false;
+    }
+}
+
+server.on('upgrade', (request, socket, head) => {
+    socket.on('error', () => { });
+    let pathname;
+    try { pathname = new URL(request.url, 'http://localhost').pathname.replace(/\/+$/, ''); } catch (_) { return rejectUpgrade(socket, '400 Bad Request'); }
+    if (request.method !== 'GET' || pathname !== WS_PATH) return rejectUpgrade(socket, '404 Not Found');
+    const session = getSession(request);
+    if (!session) return rejectUpgrade(socket, '401 Unauthorized');
+    if (!originAllowed(request)) return rejectUpgrade(socket, '403 Forbidden');
+    const key = String(request.headers['sec-websocket-key'] || '').trim();
+    const decodedKey = Buffer.from(key, 'base64');
+    const connection = String(request.headers.connection || '').toLowerCase().split(',').map(value => value.trim());
+    if (String(request.headers.upgrade || '').toLowerCase() !== 'websocket' || !connection.includes('upgrade') ||
+        decodedKey.length !== 16 || decodedKey.toString('base64') !== key || request.headers['sec-websocket-version'] !== '13') {
+        return rejectUpgrade(socket, '400 Bad Request');
+    }
+    const accept = crypto.createHash('sha1').update(key + WS_GUID).digest('base64');
+    socket.write(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`);
+    socket.setNoDelay(true);
+    const client = {
+        socket,
+        clientId: crypto.randomUUID(),
+        sessionKey: session.key,
+        userId: session.user.id,
+        buffer: Buffer.alloc(0),
+        reporting: { tracker: null, device: null },
+        ...requestInfo(request),
+        destroyed: false,
+        closing: false,
+        alive: true,
+    };
+    clients.add(client);
+    if (!clientsByUser.has(client.userId)) clientsByUser.set(client.userId, new Set());
+    clientsByUser.get(client.userId).add(client);
+    socket.on('data', chunk => {
+        if (client.destroyed || client.closing) return;
+        if (client.buffer.length + chunk.length > MAX_WS_BUFFER_BYTES) return closeClient(client, 1009);
+        client.buffer = client.buffer.length ? Buffer.concat([client.buffer, chunk]) : chunk;
+        processFrames(client);
+    });
+    for (const event of ['close', 'end', 'error']) socket.on(event, () => destroyClient(client));
+    if (head?.length) {
+        client.buffer = Buffer.from(head);
+        processFrames(client);
+    }
+});
 
 setInterval(() => {
-    const t = now();
-    for (const [key, session] of sessions) if (session.expiresAt <= t) sessions.delete(key);
-    for (const [key, timestamps] of authRateLimits) {
-        const recent = timestamps.filter(time => time > t - RATE_WINDOW_MS);
-        if (recent.length) authRateLimits.set(key, recent); else authRateLimits.delete(key);
+    for (const registry of registries.values()) registry.sweep();
+}, SWEEP_INTERVAL_MS).unref();
+
+setInterval(() => {
+    const time = now();
+    for (const [key, session] of sessions) if (session.expiresAt <= time) sessions.delete(key);
+    for (const [key, attempts] of authAttempts) {
+        const recent = attempts.filter(at => at > time - RATE_WINDOW_MS);
+        if (recent.length) authAttempts.set(key, recent);
+        else authAttempts.delete(key);
     }
     for (const client of [...clients]) {
-        if (!sessions.has(client.sessionKey) || !client.alive) { destroyClient(client); continue; }
+        if (!sessions.has(client.sessionKey) || !client.alive) {
+            destroyClient(client);
+            continue;
+        }
         client.alive = false;
-        try { sendFrame(client.socket, 0x9); } catch (_) { destroyClient(client); }
+        sendFrame(client, 0x9);
     }
 }, PING_INTERVAL_MS).unref();
 
-let shuttingDown = false;
 function shutdown(signal) {
     if (shuttingDown) return;
     shuttingDown = true;
     console.log(`${signal} received, saving data and shutting down.`);
-    flushLastKnownSync();
-    flushTrackersSync();
-    flushDevicesSync();
-    for (const client of [...clients]) { try { closeClient(client, 1001); } catch (_) { } }
-    server.close(() => process.exit(0));
-    setTimeout(() => process.exit(0), 2000).unref();
+    for (const client of [...clients]) closeClient(client, 1001);
+    const saved = [authStore, trackers.store, devices.store].map(store => store.flush()).every(Boolean);
+    if (!saved) console.error('One or more persistent data files could not be saved.');
+    else console.log('Persistent data flush completed.');
+    const exit = () => process.exit(saved ? 0 : 1);
+    server.close(exit);
+    setTimeout(exit, 3000).unref();
 }
+
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT', () => shutdown('SIGINT'));
-process.on('unhandledRejection', (reason) => console.error('Unhandled rejection:', reason));
+process.on('unhandledRejection', reason => {
+    console.error('Unhandled rejection:', reason);
+    shutdown('UNHANDLED_REJECTION');
+});
 
 loadUsers();
-loadTrackers();
-loadDevices();
-loadLastKnown();
-ensureLegacyTrackerRecords();
+for (const registry of registries.values()) registry.load();
 
 server.listen(PORT, HOST, () => {
-    console.log(`OpenTag v${APP_VERSION} multi-tracker backend listening on http://${HOST}:${PORT}`);
+    console.log(`OpenTag backend listening on http://${HOST}:${PORT}`);
     console.log(`WebSocket endpoint: ${WS_PATH}`);
-    console.log(`Tracker state TTL: ${TRACKER_TTL_MS} ms`);
     console.log(`Account registration: ${REGISTRATION_ENABLED ? 'enabled' : 'disabled'}`);
-    console.log(`Minimum password length: ${PASSWORD_MIN_LENGTH}`);
+    console.log(`Data directory: ${DATA_DIR || 'none (memory only)'}`);
+    if (TRUSTED_PROXY_HOPS < 1) console.log('Reverse proxy: none (X-Forwarded-* headers ignored)');
+    else if (!TRUSTED_PROXIES.count) console.warn('TRUSTED_PROXY_HOPS is set but TRUSTED_PROXY_IPS is empty; X-Forwarded-* headers are ignored. Set TRUSTED_PROXY_IPS to your reverse proxy address or range.');
+    else console.log(`Reverse proxy: ${TRUSTED_PROXY_HOPS} hop(s), ${TRUSTED_PROXIES.count} trusted address/range entr${TRUSTED_PROXIES.count === 1 ? 'y' : 'ies'}`);
     if (STATIC_DIR) console.log(`Serving web app from ${STATIC_DIR}`);
-    console.log(`Authentication database: ${AUTH_FILE || 'none (memory only)'}`);
-    console.log(`Last known positions file: ${DATA_FILE || 'none (memory only)'}`);
-    console.log(`Tracker registry file: ${TRACKERS_FILE || 'none (memory only)'}`);
-    console.log(`Device registry file: ${DEVICES_FILE || 'none (memory only)'}`);
-    console.log(`Device state TTL: ${DEVICE_TTL_MS} ms`);
 });
