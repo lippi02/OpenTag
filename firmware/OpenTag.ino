@@ -110,7 +110,7 @@ void setup()
            (unsigned long)NRF_FICR->DEVICEID[0],
            (unsigned long)NRF_FICR->DEVICEID[1]);
   char bleName[24];
-  snprintf(bleName, sizeof(bleName), "OpenTag-Test-%s", trackerId + 10);
+  snprintf(bleName, sizeof(bleName), "OpenTag-%s", trackerId + 10);
   Bluefruit.setName(bleName);
   trackerIdCharacteristic.setProperties(CHR_PROPS_READ);
   trackerIdCharacteristic.setPermission(SECMODE_OPEN, SECMODE_NO_ACCESS);
