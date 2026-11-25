@@ -1,5 +1,5 @@
 # OpenTag
-This is my project of creating and developing an opensource bluetooth tracker solution. It is developed on a seed studio XIAO-nRF52840 board. I don't know if it works on any other, I didn't have time and money to test it. I would appreciate if you tested it, you send me a feedback of your results.\
+This is my project of creating and developing an ecosystem free tracking system and an opensource bluetooth tracker solution. It is developed on a seed studio XIAO-nRF52840 board. I don't know if it works on any other, I didn't have time and money to test it. I would appreciate if you tested it, you send me a feedback of your results.\
 Same goes for browsers. Chromium browsers will 100% work, but I don't know what features need to be enabled for it in any other browsers.
 
 # How to use it:
@@ -25,13 +25,13 @@ Same goes for browsers. Chromium browsers will 100% work, but I don't know what 
  9. Install NGINX Proxy Manager Plus (Use Host Path, instead of ixVolume)
  10. Create a Custom App for the backend (Discover Apps, 3 dot, Install via YML) using the truenas-custom-app.yaml
  11. Create a DDNS (I used [No-IP](noip.com), but you can use whatever you want)
- 12. Move the opentag folder into the NGINX's host folder eg: "\\TRUENAS\apps\nginxpmplus\opentag" *(This is a generic location, you may have to change it according to your setup)*
- 13. Create a Proxy Host, where: Domain Name {Your DDNS}; Scheme: "path:" ; Forward Hostname / IP / Path: "/data/opentag/webapp/" *(You may have to change it according to your setup)*; Leave everything else as is
+ 12. Move the opentag folder into the NGINX's host folder eg: "\\TRUENAS\apps\nginxpmplus\opentag" (This is a generic location, you may have to change it according to your setup)
+ 13. Create a Proxy Host (values use "" for better visibility. Copy it without them), where: Domain Name: "{Your DDNS}"; Scheme: "path:" ; Forward Hostname / IP / Path: "/data/opentag/webapp/" (You may have to change it according to your setup); Leave everything else as is
  14. Go to Custom Locations /path: "/ws/"; Scheme: "http://"; Forward Hostname / IP / Path: {Your NAS' IP}; Forward Port: "3000"
- 16. Scroll down and click on "Add Location", then fill everything as in step 14, but /path: should be /api/ instead of /ws/
- 17. Switch to TLS, In the dropdown menu select "Request a new Certificate"; and check "Force HTTPS"; Leave everything else as is\
-    *(You may have to open a port on your router if NGINX throws an error: (This may differ between manufacturers)*
-     1. *Service name: OpenTag HTTP; Protocol TCP; Internal host: {Your Truenas IP Address}; External port: 80, Internal port: 30361 (This is the default port, that NGINX uses, your may differ according to your setup)*
-     2. *Service name: OpenTag HTTPS; Protocol TCP; Internal host: {Your Truenas IP Address}; External port: 443, Internal port: 30362 (This is the default port, that NGINX uses, your may differ according to your setup))*
- 19. If you did everything right and click on Save, your DDNS Address should be accessible and now you can see your OWN hosted website\
-*(You may also have to setup a DDNS service in your router to prevent a non-accessible website, because your ISP changed your public IP. But the process differs between manufacturers)*
+ 15. Scroll down and click on "Add Location", then fill everything as in step 14, but /path: should be /api/ instead of /ws/
+ 16. Switch to TLS, In the dropdown menu select "Request a new Certificate"; and check "Force HTTPS"; Leave everything else as is\
+    (You may have to open a port on your router if NGINX throws an error: (This may differ between manufacturers)
+     1. Service name: OpenTag HTTP; Protocol TCP; Internal host: {Your Truenas IP Address}; External port: 80, Internal port: 30361 (This is the default port, that NGINX uses, your may differ according to your setup)
+     2. Service name: OpenTag HTTPS; Protocol TCP; Internal host: {Your Truenas IP Address}; External port: 443, Internal port: 30362 (This is the default port, that NGINX uses, your may differ according to your setup))
+ 17. If you did everything right and click on Save, your DDNS Address should be accessible and now you can see your OWN hosted website\
+(You may also have to setup a DDNS service in your router to prevent a non-accessible website, because your ISP changed your public IP. But the process differs between manufacturers)
