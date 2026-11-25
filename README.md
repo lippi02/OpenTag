@@ -1,6 +1,7 @@
 # OpenTag
-This is my project of creating and developing an ecosystem free tracking system and an opensource bluetooth tracker solution. It is developed on a seed studio XIAO-nRF52840 board. I don't know if it works on any other, I didn't have time and money to test it. I would appreciate if you tested it, you send me a feedback of your results.\
+This is my project of creating and developing an ecosystem free tracking system and an opensource bluetooth tracker. It is developed on a seed studio XIAO-nRF52840 board. I don't know if it works on any other, I didn't have time and money to test it. I would appreciate if you tested it, you send me a feedback of your results.\
 Same goes for browsers. Chromium browsers will 100% work, but I don't know what features need to be enabled for it in any other browsers.
+Other than the tracker everything else works as intended in every browser.
 
 # How to use it:
  1. Download the latest [release](https://github.com/lippi02/OpenTag/releases)
